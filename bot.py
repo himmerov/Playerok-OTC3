@@ -11,6 +11,19 @@ import requests
 TOKEN = "8267059468:AAHgQ8o78PhMH3CwFVhT7hfpillQBrmt_L8"
 bot = telebot.TeleBot(TOKEN)
 
+def check_single_instance(port=8888):
+    """Проверяет, не запущен ли уже бот"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("localhost", port))
+        return True
+    except socket.error:
+        print("❌ Бот уже запущен! Завершаюсь...")
+        sys.exit(1)
+
+# Проверка перед запуском
+check_single_instance()
+
 # Получаем путь к папке, где находится скрипт
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -2559,4 +2572,5 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"❌ ОШИБКА ПРИ ЗАПУСКЕ БОТА: {e}")
         print("🔄 ПЕРЕЗАПУСК...")
+
         bot.polling(none_stop=True, interval=0)

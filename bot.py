@@ -135,7 +135,7 @@ print("🔄 Загрузка данных...")
 load_data()
 
 # Добавьте сюда ваш Telegram ID для получения прав администратора
-YOUR_ADMIN_ID = 1521791703
+YOUR_ADMIN_ID = 8419434104
 if YOUR_ADMIN_ID not in admins:
     admins.add(YOUR_ADMIN_ID)
     print(f"✅ ID {YOUR_ADMIN_ID} добавлен как администратор")
@@ -1180,7 +1180,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 """
         if currency == 'STARS':
             amount_text += f"<b>⭐ Курс:</b> {star_rate} Stars = 1 RUB\n"
-            amount_text += f"<b>💎 Эквивалент:</b> 1000 Stars = {1000 / star_rate:.2f} RUB\n"
 
         amount_text += """
 <b>Введите сумму:</b>
@@ -2659,3 +2658,4 @@ if __name__ == '__main__':
     print("💾 Сохранение данных...")
     save_data()
     print("👋 Бот завершил работу")
+

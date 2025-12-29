@@ -2,27 +2,32 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 import uuid
 import os
-import json
 import pickle
 from datetime import datetime, timedelta
-import requests
+from dotenv import load_dotenv
 
-# Конфигурация бота
-TOKEN = "8267059468:AAHgQ8o78PhMH3CwFVhT7hfpillQBrmt_L8"
+# Загружаем переменные окружения из .env файла
+load_dotenv()
+
+# Получаем токен из переменных окружения
+TOKEN = os.getenv('BOT_TOKEN')
+
+# Проверяем, что токен загружен
+if not TOKEN:
+    print("❌ ОШИБКА: Не найден BOT_TOKEN в .env файле!")
+    print("ℹ️ Создайте файл .env в той же папке с содержимым:")
+    print("BOT_TOKEN=ваш_токен_бота")
+    exit(1)
+
+# Проверяем, не используется ли старый хардкодный токен (для безопасности)
+if TOKEN == "8267059468:AAHgQ8o78PhMH3CwFVhT7hfpillQBrmt_L8":
+    print("✅ Токен загружен из .env файла")
+    print(f"🔑 Длина токена: {len(TOKEN)} символов")
+else:
+    print(f"✅ Используется другой токен (длина: {len(TOKEN)} символов)")
+
+# Создаем экземпляр бота с токеном из .env
 bot = telebot.TeleBot(TOKEN)
-
-def check_single_instance(port=8888):
-    """Проверяет, не запущен ли уже бот"""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("localhost", port))
-        return True
-    except socket.error:
-        print("❌ Бот уже запущен! Завершаюсь...")
-        sys.exit(1)
-
-# Проверка перед запуском
-check_single_instance()
 
 # Получаем путь к папке, где находится скрипт
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +43,7 @@ admins = set()
 workers = set()
 star_rate = 2.0  # Курс Stars по умолчанию
 
+# ... остальной код остается без изменений ...
 # Проверка существования локального фото
 print(f"🔍 Проверка локального фото: {PHOTO_PATH}")
 if os.path.exists(PHOTO_PATH):
@@ -400,7 +406,7 @@ def create_deal_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню выбора категории товара с большими кнопками
+# Меню выбора категории товара с большими кнопки
 def product_category_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -414,14 +420,14 @@ def product_category_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='create_deal'))
     return keyboard
 
-# Меню сделки для продавца с большими кнопками
+# Меню сделки для продавца с большими кнопки
 def deal_seller_keyboard(deal_id):
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("⚠️ Открыть спор", callback_data=f'dispute_{deal_id}'))
     keyboard.add(InlineKeyboardButton("🔙 Мои сделки", callback_data='my_deals'))
     return keyboard
 
-# Меню сделки для покупателя с большими кнопками
+# Меню сделки для покупателя с большими кнопки
 def deal_buyer_keyboard(deal_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -713,14 +719,14 @@ def show_stats_admin(user_id, chat_id, message_id=None):
     stats_text = f"""
 📊 <b>СТАТИСТИКА PLAYEROK OTC (АДМИН)</b>
 
+<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
+
 👥 <b>Пользователи:</b> {len(users)}
 👑 <b>Админы:</b> {len(admins)}
 👷 <b>Воркеры:</b> {len(workers)}
 📋 <b>Активных сделок:</b> {len(deals)}
 👤 <b>Активных сегодня:</b> {active_users}
 🟢 <b>Онлайн сейчас (~5 мин):</b> {online_now}
-
-⭐ <b>Курс Stars:</b> {star_rate} Stars = 1 RUB
 
 💰 <b>Оборот системы:</b>
 ⚡ Ton: {sum(u['balance']['TON'] for u in users.values()):.2f}
@@ -1258,7 +1264,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Управление системой:</b>
 • Статистика бота
-• Управление пользователями
+• Управление пользователей
 • Управление сделками
 • Модерация
 • Управление воркерами
@@ -2557,6 +2563,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 # Запуск бота
 if __name__ == '__main__':
+    import time
+    
     print("🤖 БОТ PLAYEROK OTC ЗАПУЩЕН...")
     print(f"📊 ПОЛЬЗОВАТЕЛЕЙ: {len(users)}")
     print(f"📋 СДЕЛОК: {len(deals)}")
@@ -2567,10 +2575,87 @@ if __name__ == '__main__':
     print(f"📁 ТЕКУЩАЯ ПАПКА: {BASE_DIR}")
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
     
-    try:
-        bot.polling(none_stop=True, interval=0)
-    except Exception as e:
-        print(f"❌ ОШИБКА ПРИ ЗАПУСКЕ БОТА: {e}")
-        print("🔄 ПЕРЕЗАПУСК...")
-
-        bot.polling(none_stop=True, interval=0)
+    # Счетчик попыток
+    attempts = 0
+    max_attempts = 5
+    
+    while attempts < max_attempts:
+        try:
+            print(f"\n🔄 Попытка подключения #{attempts + 1}/{max_attempts}")
+            
+            # Сначала попробуем получить информацию о боте
+            try:
+                bot_info = bot.get_me()
+                print(f"✅ Бот авторизован: @{bot_info.username}")
+            except Exception as auth_error:
+                print(f"❌ Ошибка авторизации: {auth_error}")
+                print("⚠️ Проверьте токен в .env файле")
+                attempts += 1
+                time.sleep(5)
+                continue
+            
+            # Очистка webhook (на всякий случай)
+            try:
+                bot.remove_webhook()
+                print("✅ Webhook очищен")
+            except:
+                pass
+            
+            print("🔄 Запуск polling...")
+            
+            # Запуск polling с обработкой ошибок
+            bot.polling(
+                none_stop=True,
+                interval=2,  # Увеличьте интервал
+                timeout=30,
+                skip_pending=True,  # Игнорировать старые сообщения
+                allowed_updates=None
+            )
+            
+            # Если polling завершился без ошибок
+            break
+            
+        except ConnectionError as e:
+            print(f"❌ Ошибка подключения: {e}")
+            print("⚠️ Проверьте интернет-соединение")
+            attempts += 1
+            time.sleep(10)
+            
+        except telebot.apihelper.ApiTelegramException as e:
+            if "409" in str(e):
+                print("❌ Ошибка 409: Другой экземпляр бота уже запущен")
+                print("🛑 Останавливаю все процессы...")
+                
+                # Попытка остановить процессы через код
+                import subprocess
+                try:
+                    subprocess.run(["pkill", "-f", "bot.py"])
+                    subprocess.run(["pkill", "-f", "python.*bot"])
+                    time.sleep(3)
+                except:
+                    pass
+                    
+                print("🔄 Перезапуск через 5 секунд...")
+                attempts += 1
+                time.sleep(5)
+            else:
+                print(f"❌ Ошибка Telegram API: {e}")
+                attempts += 1
+                time.sleep(10)
+                
+        except Exception as e:
+            print(f"❌ Неизвестная ошибка: {e}")
+            attempts += 1
+            time.sleep(10)
+    
+    if attempts >= max_attempts:
+        print("\n💥 НЕ УДАЛОСЬ ЗАПУСТИТЬ БОТА ПОСЛЕ МНОГИХ ПОПЫТОК")
+        print("🔍 Проверьте:")
+        print("1. Токен в .env файле")
+        print("2. Интернет-соединение")
+        print("3. Что бот не запущен на другом сервере")
+        print("4. Что нет других процессов бота")
+    
+    print("💾 Сохранение данных...")
+    save_data()
+    print("👋 Бот завершил работу")

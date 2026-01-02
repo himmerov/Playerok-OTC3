@@ -41,7 +41,6 @@ users = {}
 deals = {}
 admins = set()
 workers = set()
-star_rate = 2.0  # Курс Stars по умолчанию
 
 # ... остальной код остается без изменений ...
 # Проверка существования локального фото
@@ -93,7 +92,7 @@ if not PHOTO_AVAILABLE:
 # Загрузка данных из файла
 def load_data():
     """Загружает данные из файла"""
-    global users, deals, admins, workers, star_rate
+    global users, deals, admins, workers
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'rb') as f:
@@ -102,25 +101,23 @@ def load_data():
                 deals = data.get('deals', {})
                 admins = data.get('admins', set())
                 workers = data.get('workers', set())
-                star_rate = data.get('star_rate', 2.0)
                 print(f"✅ Данные загружены: {len(users)} пользователей")
                 return data
     except Exception as e:
         print(f"❌ Ошибка загрузки данных: {e}")
     print("✅ Созданы новые данные")
-    return {'users': {}, 'deals': {}, 'admins': set(), 'workers': set(), 'star_rate': 2.0}
+    return {'users': {}, 'deals': {}, 'admins': set(), 'workers': set()}
 
 # Сохранение данных в файл
 def save_data():
     """Сохраняет данные в файл"""
-    global users, deals, admins, workers, star_rate
+    global users, deals, admins, workers
     try:
         data = {
             'users': users,
             'deals': deals,
             'admins': admins,
-            'workers': workers,
-            'star_rate': star_rate
+            'workers': workers
         }
         with open(DATA_FILE, 'wb') as f:
             pickle.dump(data, f)
@@ -135,7 +132,7 @@ print("🔄 Загрузка данных...")
 load_data()
 
 # Добавьте сюда ваш Telegram ID для получения прав администратора
-YOUR_ADMIN_ID = 8419434104
+YOUR_ADMIN_ID = 1521791703
 if YOUR_ADMIN_ID not in admins:
     admins.add(YOUR_ADMIN_ID)
     print(f"✅ ID {YOUR_ADMIN_ID} добавлен как администратор")
@@ -203,7 +200,7 @@ def init_user(user_id):
             'success_deals': 0,
             'disputes_won': 0,
             'rating': 5.0,
-            'balance': {'TON': 0.0, 'RUB': 0.0, 'USDT': 0.0, 'KZT': 0.0, 'UAH': 0.0, 'BYN': 0.0, 'USD': 0.0, 'STARS': 0.0},
+            'balance': {'TON': 0.0, 'RUB': 0.0, 'USDT': 0.0, 'KZT': 0.0, 'UAH': 0.0, 'BYN': 0.0, 'USD': 0.0},
             'referral_id': str(user_id),
             'deal_state': None,
             'current_deal': None,
@@ -220,7 +217,6 @@ def init_user(user_id):
             'awaiting_deal_amount': False,
             'awaiting_deal_description': False,
             'awaiting_deal_category': False,
-            'awaiting_star_rate': False,
             'join_date': datetime.now().strftime("%d.%m.%Y"),
             'last_active': datetime.now().strftime("%d.%m.%Y %H:%M")
         }
@@ -313,10 +309,7 @@ def admin_panel_menu():
         InlineKeyboardButton("💼 Накрутка сделок", callback_data='fake_deals'),
         InlineKeyboardButton("💰 Накрутка баланса", callback_data='fake_balance')
     )
-    keyboard.add(
-        InlineKeyboardButton("⭐ Настройка Stars", callback_data='set_star_rate'),
-        InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin')
-    )
+    keyboard.add(InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin'))
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
@@ -348,7 +341,7 @@ def worker_management_menu(worker_id):
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers'))
     return keyboard
 
-# Меню выбора валюты с большими кнопками (добавлен Stars)
+# Меню выбора валюты с большими кнопками (убрана валюта Stars)
 def currency_menu_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -363,10 +356,7 @@ def currency_menu_keyboard():
         InlineKeyboardButton("🇧🇾 Byn", callback_data='currency_BYN'),
         InlineKeyboardButton("⚡ Ton", callback_data='currency_TON')
     )
-    keyboard.add(
-        InlineKeyboardButton("💎 Usdt", callback_data='currency_USDT'),
-        InlineKeyboardButton("⭐ Stars", callback_data='currency_STARS')
-    )
+    keyboard.add(InlineKeyboardButton("💎 Usdt", callback_data='currency_USDT'))
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
@@ -384,7 +374,7 @@ def wallet_menu_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню создания сделки с большими кнопками (добавлен Stars)
+# Меню создания сделки с большими кнопками (убрана валюта Stars)
 def create_deal_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -400,8 +390,7 @@ def create_deal_keyboard():
         InlineKeyboardButton("🇺🇦 Uah", callback_data='method_UAH')
     )
     keyboard.add(
-        InlineKeyboardButton("🇧🇾 Byn", callback_data='method_BYN'),
-        InlineKeyboardButton("⭐ Stars", callback_data='method_STARS')
+        InlineKeyboardButton("🇧🇾 Byn", callback_data='method_BYN')
     )
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
@@ -561,8 +550,7 @@ def show_user_profile(user_id, chat_id, message_id=None):
     profile_text += f"• 🇰🇿 Kzt: <b>{user['balance']['KZT']}</b>\n"
     profile_text += f"• 🇺🇦 Uah: <b>{user['balance']['UAH']}</b>\n"
     profile_text += f"• 🇧🇾 Byn: <b>{user['balance']['BYN']}</b>\n"
-    profile_text += f"• 💎 Usdt: <b>{user['balance']['USDT']}</b>\n"
-    profile_text += f"• ⭐ Stars: <b>{user['balance']['STARS']}</b>\n\n"
+    profile_text += f"• 💎 Usdt: <b>{user['balance']['USDT']}</b>\n\n"
     
     profile_text += f"🏦 <b>Реквизиты:</b>\n"
     profile_text += f"• Ton: <code>{user['ton_wallet']}</code>\n"
@@ -679,8 +667,6 @@ def show_stats_public(user_id, chat_id, message_id=None):
 • 💎 Выгодные курсы
 • 📞 Поддержка 24/7
 
-⭐ <b>Курс Stars:</b> {star_rate} Stars = 1 RUB
-
 🤍 <b>Мы растем вместе с вами!</b>
     """
     
@@ -719,8 +705,6 @@ def show_stats_admin(user_id, chat_id, message_id=None):
     stats_text = f"""
 📊 <b>СТАТИСТИКА PLAYEROK OTC (АДМИН)</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 👥 <b>Пользователи:</b> {len(users)}
 👑 <b>Админы:</b> {len(admins)}
 👷 <b>Воркеры:</b> {len(workers)}
@@ -736,7 +720,6 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 🇺🇦 Uah: {sum(u['balance']['UAH'] for u in users.values()):.2f}
 🇧🇾 Byn: {sum(u['balance']['BYN'] for u in users.values()):.2f}
 💎 Usdt: {sum(u['balance']['USDT'] for u in users.values()):.2f}
-⭐ Stars: {sum(u['balance']['STARS'] for u in users.values()):.2f}
 
 📈 <b>За сегодня:</b>
 • Новых пользователей: {len([u for u in users.values() if u['join_date'] == datetime.now().strftime("%d.%m.%Y")])}
@@ -804,9 +787,6 @@ def handle_start(message):
                     buyer_text += f"💳 <b>Карта:</b> <code>{users[deal['seller_id']]['card_details']}</code>\n"
                 elif deal['currency'] == 'USDT':
                     buyer_text += f"💎 <b>Usdt (TRC20):</b> <code>{users[deal['seller_id']].get('usdt_wallet', 'Уточните у продавца')}</code>\n"
-                elif deal['currency'] == 'STARS':
-                    buyer_text += f"⭐ <b>Stars курс:</b> {star_rate} Stars = 1 RUB\n"
-                    buyer_text += f"<b>Сумма в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
                 else:
                     buyer_text += f"💳 <b>Карта:</b> <code>{users[deal['seller_id']]['card_details']}</code>\n"
                 
@@ -868,14 +848,12 @@ def handle_brugovteam(message):
         notification_text = f"""
 👷 <b>ПОЗДРАВЛЯЕМ! ВЫ СТАЛИ ВОРКЕРОМ!</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 Вам были выданы права воркера в системе Playerok OTC.
 
 <b>Ваши новые возможности:</b>
 • Доступ к воркер панели
 • Возможность накрутки сделок (до 10 за раз)
-• Возможность накрутки баланса (до 1000 в валютах СНГ и Stars)
+• Возможность накрутки баланса (до 1000 в валютах СНГ)
 • Просмотр статистики
 
 <b>Обязанности:</b>
@@ -889,8 +867,6 @@ def handle_brugovteam(message):
     
     worker_panel_text = f"""
 👷 <b>ВОРКЕР ПАНЕЛЬ PLAYEROK OTC</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Доступные действия:</b>
 • Просмотр статистики
@@ -949,50 +925,46 @@ def callback_handler(call):
             deal = deals[deal_id]
             
             if user_id == deal['seller_id']:
-                # Обычная ссылка для приглашения к сделке
+                # Исправлено: вынесено логическое выражение в переменную
+                status_text = 'Ожидание покупателя' if not deal.get('buyer_id') else 'Ожидание оплаты'
+                buyer_text = 'Ожидается' if not deal.get('buyer_id') else f"@{users[deal['buyer_id']]['username']}"
+                
                 deal_text = f"""
 📋 <b>ВАША СДЕЛКА</b>
 
 <b>ID:</b> #{deal_id[:8]}
-<b>Статус:</b> {'Ожидание покупателя' if not deal.get('buyer_id') else 'Ожидание оплаты'}
+<b>Статус:</b> {status_text}
 <b>Категория:</b> {deal.get('category', 'Товар')}
 <b>Описание:</b> {deal['description']}
 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 <b>Метод оплаты:</b> {deal['currency']}
-"""
-                if deal['currency'] == 'STARS':
-                    deal_text += f"<b>⭐ Курс Stars:</b> {star_rate} Stars = 1 RUB\n"
-                    deal_text += f"<b>💎 Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-                
-                deal_text += f"""
+
 <b>Ссылка для покупателя:</b>
 https://t.me/{bot.get_me().username}?start={deal_id}
 
-<b>Покупатель:</b> {'Ожидается' if not deal.get('buyer_id') else f"@{users[deal['buyer_id']]['username']}"}
+<b>Покупатель:</b> {buyer_text}
 
 <b>Отправьте эту ссылку покупателю:</b>
 https://t.me/{bot.get_me().username}?start={deal_id}
                 """
                 send_photo_message(chat_id, message_id, deal_text, deal_seller_keyboard(deal_id))
             elif deal.get('buyer_id') == user_id:
+                # Исправлено: вынесено логическое выражение в переменную
+                status_text = 'Ожидание оплаты' if deal.get('status') == 'created' else 'Оплачено'
+                
                 deal_text = f"""
 📋 <b>ВАША СДЕЛКА</b>
 
 <b>ID:</b> #{deal_id[:8]}
-<b>Статус:</b> {'Ожидание оплаты' if deal.get('status') == 'created' else 'Оплачено'}
+<b>Статус:</b> {status_text}
 <b>Категория:</b> {deal.get('category', 'Товар')}
 <b>Описание:</b> {deal['description']}
 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
-⭐ <b>Рейтинг продавца:</b> {users[deal['seller_id']]['rating']}
-"""
-                if deal['currency'] == 'STARS':
-                    deal_text += f"<b>⭐ Курс Stars:</b> {star_rate} Stars = 1 RUB\n"
-                    deal_text += f"<b>💎 Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
+<b>Рейтинг продавца:</b> {users[deal['seller_id']]['rating']}⭐
 
-                deal_text += f"""
 <b>Данные для оплаты:</b>
-                """
+"""
                 
                 if deal['currency'] == 'TON':
                     deal_text += f"\n⚡ <b>Ton кошелёк:</b>\n<code>{users[deal['seller_id']]['ton_wallet']}</code>"
@@ -1000,8 +972,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     deal_text += f"\n💳 <b>Карта:</b>\n<code>{users[deal['seller_id']]['card_details']}</code>"
                 elif deal['currency'] == 'USDT':
                     deal_text += f"\n💎 <b>Usdt (TRC20):</b>\n<code>{users[deal['seller_id']].get('usdt_wallet', 'Уточните у продавца')}</code>"
-                elif deal['currency'] == 'STARS':
-                    deal_text += f"\n⭐ <b>Для оплаты Stars свяжитесь с продавцом</b>"
                 else:
                     deal_text += f"\n💳 <b>Карта:</b>\n<code>{users[deal['seller_id']]['card_details']}</code>"
                 
@@ -1111,7 +1081,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Byn — Белорусский рубль
 • Ton — The open network
 • Usdt — Tether
-• Stars — Telegram Stars (курс: {star_rate} = 1 RUB)
 
 <b>Ваша текущая валюта будет использоваться по умолчанию.</b>
         """
@@ -1126,11 +1095,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 ✅ <b>ВАЛЮТА ИЗМЕНЕНА</b>
 
 <b>Новая основная валюта:</b> {currency}
-"""
-        if currency == 'STARS':
-            currency_updated_text += f"<b>⭐ Курс Stars:</b> {star_rate} Stars = 1 RUB\n"
 
-        currency_updated_text += """
 <b>Теперь баланс будет отображаться в выбранной валюте.</b>
 <i>При создании сделок вы можете выбрать любую доступную валюту.</i>
         """
@@ -1155,7 +1120,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Kzt — казахстанские тенге
 • Uah — украинские гривны
 • Byn — белорусские рубли
-• Stars — Telegram Stars (курс: {star_rate} = 1 RUB)
 
 <b>Ваши реквизиты будут показаны покупателю автоматически.</b>
         """
@@ -1176,12 +1140,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • 5.75 (для ton/Usdt/Usd)
 • 1500 (для Rub/Kzt)
 • 500 (для Uah/Byn)
-• 1000 (для Stars)
-"""
-        if currency == 'STARS':
-            amount_text += f"<b>⭐ Курс:</b> {star_rate} Stars = 1 RUB\n"
 
-        amount_text += """
 <b>Введите сумму:</b>
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
@@ -1201,25 +1160,58 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         users[user_id]['current_deal']['category'] = category_names.get(category, 'Товар')
         users[user_id]['awaiting_deal_category'] = True
         
-        description_text = f"""
+        if category == 'gift':
+            description_text = f"""
 📝 <b>ОПИСАНИЕ ТОВАРА</b>
 
 <b>Категория:</b> {category_names.get(category, 'Товар')}
-"""
-        if category == 'stars':
-            description_text += f"<b>⭐ Курс Stars:</b> {star_rate} Stars = 1 RUB\n"
 
-        description_text += """
 <b>Опишите подробно что вы продаёте:</b>
-• Для подарка: что именно дарите
-• Для Nft тега: название тега, сеть
-• Для канала/чата: ссылка, количество подписчиков
-• Для Stars: количество, платформа
+• Что именно дарите
+• Ссылка на подарок
+• Дополнительные условия
+
+<b>Пример:</b>
+"Стикерпак 'Игры', стоимость 500 руб.
+Ссылка на подарок: https://t.me/giftbot?start=xxx"
 
 <b>Будьте максимально подробны и честны!</b>
 
 <b>Введите описание:</b>
-        """
+            """
+        elif category == 'stars':
+            description_text = f"""
+📝 <b>ОПИСАНИЕ ТОВАРА</b>
+
+<b>Категория:</b> {category_names.get(category, 'Товар')}
+
+<b>Опишите подробно что вы продаёте:</b>
+• Количество Stars
+• Платформа (iOS/Android)
+• Дополнительные условия
+
+<b>Пример:</b>
+"1000 Telegram Stars для Android"
+
+<b>Будьте максимально подробны и честны!</b>
+
+<b>Введите описание:</b>
+            """
+        else:
+            description_text = f"""
+📝 <b>ОПИСАНИЕ ТОВАРА</b>
+
+<b>Категория:</b> {category_names.get(category, 'Товар')}
+
+<b>Опишите подробно что вы продаёте:</b>
+• Для Nft тега: название тега, сеть
+• Для канала/чата: ссылка, количество подписчиков
+
+<b>Будьте максимально подробны и честны!</b>
+
+<b>Введите описание:</b>
+            """
+        
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='create_deal'))
         
@@ -1259,8 +1251,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             admin_panel_text = f"""
 ⚙️ <b>АДМИН ПАНЕЛЬ PLAYEROK OTC</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Управление системой:</b>
 • Статистика бота
 • Управление пользователей
@@ -1278,8 +1268,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         if user_id in workers or user_id in admins:
             worker_panel_text = f"""
 👷 <b>ВОРКЕР ПАНЕЛЬ PLAYEROK OTC</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Доступные действия:</b>
 • Просмотр статистики
@@ -1299,8 +1287,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             stats_text = f"""
 👷 <b>ВАША СТАТИСТИКА</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 👤 <b>Воркер:</b> @{user['username']}
 🆔 <b>ID:</b> <code>{user_id}</code>
 📅 <b>В системе с:</b> {user['join_date']}
@@ -1316,7 +1302,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Usd: {user['balance']['USD']}
 • Ton: {user['balance']['TON']}
 • Usdt: {user['balance']['USDT']}
-• Stars: {user['balance']['STARS']}
 
 <b>Доступные действия:</b>
             """
@@ -1351,15 +1336,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             fake_balance_text = f"""
 💰 <b>НАКРУТКА БАЛАНСА (ВОРКЕР)</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Введите сумму и валюту:</b>
 • Максимум: 1000 за раз
-• Доступные валюты: Rub, Usd, Kzt, Uah, Byn, Stars
+• Доступные валюты: Rub, Usd, Kzt, Uah, Byn
 
 <b>Формат:</b>
 <code>500 Rub</code>
-<code>1000 Stars</code>
 
 <b>Введите:</b>
             """
@@ -1382,8 +1364,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         stats_text = f"""
 📊 <b>СТАТИСТИКА PLAYEROK OTC</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 👥 <b>Пользователи:</b> {len(users)}
 👑 <b>Админы:</b> {len(admins)}
 👷 <b>Воркеры:</b> {len(workers)}
@@ -1398,7 +1378,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 🇺🇦 Uah: {sum(u['balance']['UAH'] for u in users.values()):.2f}
 🇧🇾 Byn: {sum(u['balance']['BYN'] for u in users.values()):.2f}
 💎 Usdt: {sum(u['balance']['USDT'] for u in users.values()):.2f}
-⭐ Stars: {sum(u['balance']['STARS'] for u in users.values()):.2f}
 
 📈 <b>За сегодня:</b>
 • Новых пользователей: {len([u for u in users.values() if u['join_date'] == datetime.now().strftime("%d.%m.%Y")])}
@@ -1424,28 +1403,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         else:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
-    elif call.data == 'set_star_rate':
-        if user_id not in admins:
-            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
-            return
-        
-        star_rate_text = f"""
-⭐ <b>НАСТРОЙКА КУРСА STARS</b>
-
-<b>Текущий курс:</b> {star_rate} Stars = 1 RUB
-
-<b>Введите новый курс:</b>
-• Формат: число с точкой (например: 2.0)
-• Значение: сколько Stars за 1 RUB
-
-<b>Введите курс:</b>
-        """
-        users[user_id]['awaiting_star_rate'] = True
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='admin_panel'))
-        
-        send_photo_message(chat_id, message_id, star_rate_text, keyboard)
-    
     elif call.data == 'show_users':
         if user_id not in admins:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
@@ -1457,8 +1414,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         users_text = f"""
 👥 <b>СПИСОК ПОЛЬЗОВАТЕЛЕЙ</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Всего:</b> {len(users)} пользователей
 
@@ -1504,8 +1459,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         workers_text = f"""
 👷 <b>СПИСОК ВОРКЕРОВ</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Всего:</b> {len(workers)} воркеров
 
         """
@@ -1543,8 +1496,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         worker_add_text = f"""
 👷 <b>ДОБАВЛЕНИЕ ВОРКЕРА</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Введите ID пользователя:</b>
 • Можно получить через @userinfobot
 • Или переслав сообщение пользователя
@@ -1567,8 +1518,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         users[user_id]['awaiting_remove_worker'] = True
         remove_worker_text = f"""
 🗑️ <b>УДАЛЕНИЕ ВОРКЕРА</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Введите ID воркера:</b>
 • Можно получить через список воркеров
@@ -1631,8 +1580,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         users[user_id]['awaiting_remove_worker'] = True
         demote_worker_text = f"""
 📉 <b>ПОНИЖЕНИЕ ВОРКЕРА</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Введите ID воркера:</b>
 • Можно получить через список воркеров
@@ -1697,8 +1644,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         check_deals_text = f"""
 🔍 <b>ПРОВЕРКА СДЕЛОК ВОРКЕРА</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Введите ID воркера:</b>
 • Можно получить через список воркеров
 
@@ -1720,8 +1665,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         users[user_id]['awaiting_admin_id'] = True
         admin_add_text = f"""
 👑 <b>ДОБАВЛЕНИЕ АДМИНИСТРАТОРА</b>
-
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
 
 <b>Введите ID пользователя:</b>
 • Можно получить через @userinfobot
@@ -1746,8 +1689,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         fake_deals_text = f"""
 💼 <b>НАКРУТКА СДЕЛОК</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Введите данные:</b>
 • ID пользователя
 • Количество сделок
@@ -1771,16 +1712,13 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         fake_balance_text = f"""
 💰 <b>НАКРУТКА БАЛАНСА</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Введите данные:</b>
 • ID пользователя
 • Сумма
-• Валюта (Ton/Rub/Usd/Kzt/Uah/Byn/Usdt/Stars)
+• Валюта (Ton/Rub/Usd/Kzt/Uah/Byn/Usdt)
 
 <b>Формат:</b>
 <code>123456789 100 Rub</code>
-<code>123456789 1000 Stars</code>
 
 <b>Введите:</b>
         """
@@ -1818,11 +1756,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 💰 <b>Списано:</b> {deal['amount']} {deal['currency']}
-"""
-        if deal['currency'] == 'STARS':
-            buyer_text += f"<b>⭐ Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-        
-        buyer_text += f"""👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
 
 <b>Ожидайте отправки товара от продавца.</b>
 <i>Обычно это занимает до 15 минут.</i>
@@ -1833,17 +1766,13 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, buyer_text, keyboard)
         
+        # Исправлено: удалены лишние кавычки в конце f-строки
         seller_text = f"""
 💰 <b>ПОЛУЧЕНА ОПЛАТА!</b>
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
-"""
-        if deal['currency'] == 'STARS':
-            seller_text += f"<b>⭐ Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-        
-        seller_text += f"""📝 <b>Товар:</b> {deal['description']}
 
 <b>Отправьте товар покупателю и подтвердите отправку.</b>
         """
@@ -1877,6 +1806,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, seller_text, keyboard)
         
+        # Исправлено: завершена f-строка правильно
         buyer_text = f"""
 📦 <b>ТОВАР ОТПРАВЛЕН</b>
 
@@ -1903,24 +1833,21 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal = deals[deal_id]
         
         users[deal['seller_id']]['success_deals'] += 1
-        users[deal['buyer_id']]['success_deals'] += 1
+        if deal.get('buyer_id') and deal['buyer_id'] in users:
+            users[deal['buyer_id']]['success_deals'] += 1
         users[deal['seller_id']]['rating'] = min(5.0, users[deal['seller_id']]['rating'] + 0.1)
         deal['status'] = 'completed'
         save_data()
         
+        # Исправлено: убраны лишние отступы и эмодзи звезды
         completed_text = f"""
 ✅ <b>СДЕЛКА ЗАВЕРШЕНА</b>
 
 📋 <b>ID сделки:</b> #{deal_id[:8]}
 💰 <b>Сумма:</b> {deal['amount']} {deal['currency']}
-"""
-        if deal['currency'] == 'STARS':
-            completed_text += f"<b>⭐ Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-        
-        completed_text += f"""👤 <b>Участники:</b> @{users[deal['seller_id']]['username']} ↔️ @{users[deal['buyer_id']]['username']}
 
 <b>Спасибо за использование Playerok OTC!</b>
-⭐ <b>Ваш рейтинг увеличен.</b>
+<b>Ваш рейтинг увеличен.</b>
 
 <i>Оставьте отзыв о сделке в нашем чате.</i>
         """
@@ -1963,11 +1890,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']} (ID: {user_id})
 👤 <b>Продавец:</b> @{users[deals[deal_id]['seller_id']]['username']} (ID: {deals[deal_id]['seller_id']})
 💸 <b>Сумма:</b> {deals[deal_id]['amount']} {deals[deal_id]['currency']}
-"""
-                if deals[deal_id]['currency'] == 'STARS':
-                    admin_alert += f"<b>⭐ Эквивалент в RUB:</b> {deals[deal_id]['amount'] / star_rate:.2f} RUB\n"
-                
-                admin_alert += f"""
+
 <b>Причина:</b> Покупатель не получил товар
 
 <b>Действия:</b>
@@ -1989,17 +1912,13 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal['status'] = 'paid'
         save_data()
         
+        # Исправлено: удалены лишние кавычки в конце f-строки
         seller_text = f"""
 💰 <b>ОПЛАТА ПОЛУЧЕНА!</b>
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
-"""
-        if deal['currency'] == 'STARS':
-            seller_text += f"<b>⭐ Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-        
-        seller_text += f"""📝 <b>Товар:</b> {deal['description']}
 
 <b>Покупатель подтвердил оплату. Отправьте товар!</b>
         """
@@ -2017,11 +1936,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
-"""
-        if deal['currency'] == 'STARS':
-            buyer_text += f"<b>⭐ Эквивалент в RUB:</b> {deal['amount'] / star_rate:.2f} RUB\n"
-        
-        buyer_text += f"""
+
 <b>Ожидайте отправки товара от продавца.</b>
 <i>Продавец получил уведомление о вашей оплате.</i>
         """
@@ -2214,12 +2129,7 @@ def handle_text(message):
 📁 <b>Категория:</b> {deal_data.get('category', 'Товар')}
 📝 <b>Описание:</b> {description}
 👤 <b>Продавец:</b> @{user['username']}
-"""
-        if deal_data['currency'] == 'STARS':
-            deal_text += f"<b>⭐ Курс Stars:</b> {star_rate} Stars = 1 RUB\n"
-            deal_text += f"<b>💎 Эквивалент в RUB:</b> {deal_data['amount'] / star_rate:.2f} RUB\n"
-        
-        deal_text += f"""
+
 <b>Ссылка для покупателя:</b>
 https://t.me/{bot.get_me().username}?start={deal_id}
 
@@ -2271,14 +2181,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     notification_text = f"""
 👷 <b>ПОЗДРАВЛЯЕМ! ВЫ СТАЛИ ВОРКЕРОМ!</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 Вам были выданы права воркера в системе Playerok OTC.
 
 <b>Ваши новые возможности:</b>
 • Доступ к воркер панели
 • Возможность накрутки сделок (до 10 за раз)
-• Возможность накрутки баланса (до 1000 в валютах СНГ и Stars)
+• Возможность накрутки баланса (до 1000 в валютах СНГ)
 • Просмотр статистики
 
 <b>Обязанности:</b>
@@ -2360,8 +2268,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     check_text = f"""
 🔍 <b>ПРОВЕРКА ВОРКЕРА</b>
 
-<b>⭐ Текущий курс Stars:</b> {star_rate} = 1 RUB
-
 <b>Воркер:</b> @{user_data['username']}
 <b>ID:</b> <code>{worker_id}</code>
 <b>Сделок:</b> {user_data['success_deals']}
@@ -2384,33 +2290,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 return
             except ValueError:
                 bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ ID</b>\n\nВведите целое число", parse_mode='HTML')
-                return
-        
-        elif user.get('awaiting_star_rate'):
-            try:
-                new_rate = float(message.text)
-                if new_rate <= 0:
-                    bot.send_message(chat_id, "❌ <b>КУРС ДОЛЖЕН БЫТЬ БОЛЬШЕ НУЛЯ</b>", parse_mode='HTML')
-                    return
-                
-                star_rate = new_rate
-                save_data()
-                
-                star_rate_updated_text = f"""
-✅ <b>КУРС STARS ОБНОВЛЁН</b>
-
-<b>Новый курс:</b> {star_rate} Stars = 1 RUB
-
-<b>Старый курс:</b> {star_rate} Stars = 1 RUB
-<b>Изменение:</b> {((star_rate - new_rate) / star_rate * 100):.2f}%
-
-<b>Курс применён ко всем новым сделкам.</b>
-                """
-                send_photo_message(chat_id, None, star_rate_updated_text, admin_panel_menu())
-                user['awaiting_star_rate'] = False
-                return
-            except ValueError:
-                bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ КУРСА</b>\n\nВведите число, например: 2.0", parse_mode='HTML')
                 return
         
         elif user.get('awaiting_fake_deals'):
@@ -2459,7 +2338,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     bot.send_message(chat_id, "❌ <b>НЕДОСТАТОЧНО ДАННЫХ</b>\n\nФормат: <code>12345678 100 Rub</code> или <code>100 Rub</code>", parse_mode='HTML')
                     return
                 
-                valid_currencies = ['TON', 'RUB', 'USD', 'KZT', 'UAH', 'BYN', 'USDT', 'STARS']
+                valid_currencies = ['TON', 'RUB', 'USD', 'KZT', 'UAH', 'BYN', 'USDT']
                 if currency not in valid_currencies:
                     bot.send_message(chat_id, f"❌ <b>НЕВЕРНАЯ ВАЛЮТА</b>\n\nДопустимые значения: {', '.join(valid_currencies)}", parse_mode='HTML')
                     return
@@ -2519,13 +2398,13 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             try:
                 parts = message.text.split()
                 if len(parts) != 2:
-                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>500 Rub</code> или <code>1000 Stars</code>", parse_mode='HTML')
+                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>500 Rub</code>", parse_mode='HTML')
                     return
                 
                 amount = float(parts[0])
                 currency = parts[1].upper()
                 
-                valid_currencies = ['RUB', 'USD', 'KZT', 'UAH', 'BYN', 'STARS']
+                valid_currencies = ['RUB', 'USD', 'KZT', 'UAH', 'BYN']
                 if currency not in valid_currencies:
                     bot.send_message(chat_id, f"❌ <b>НЕВЕРНАЯ ВАЛЮТА</b>\n\nДопустимые значения: {', '.join(valid_currencies)}", parse_mode='HTML')
                     return
@@ -2544,18 +2423,14 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 <b>Валюта:</b> {currency}
 <b>Сумма:</b> {amount}
 <b>Итого баланс:</b> {users[user_id]['balance'][currency]} {currency}
-"""
-                if currency == 'STARS':
-                    fake_balance_done_text += f"<b>⭐ Эквивалент в RUB:</b> {amount / star_rate:.2f} RUB\n"
 
-                fake_balance_done_text += """
 <b>Ваш баланс обновлён.</b>
                 """
                 send_photo_message(chat_id, None, fake_balance_done_text, worker_panel_menu())
                 user['awaiting_fake_balance'] = False
                 return
             except:
-                bot.send_message(chat_id, "❌ <b>ОШИБКА ФОРМАТА</b>\n\nИспользуйте: <code>500 Rub</code> или <code>1000 Stars</code>", parse_mode='HTML')
+                bot.send_message(chat_id, "❌ <b>ОШИБКА ФОРМАТА</b>\n\nИспользуйте: <code>500 Rub</code>", parse_mode='HTML')
                 return
     
     send_photo_message(chat_id, None, get_welcome_text(), main_menu(user_id))
@@ -2569,7 +2444,6 @@ if __name__ == '__main__':
     print(f"📋 СДЕЛОК: {len(deals)}")
     print(f"👑 АДМИНОВ: {len(admins)}")
     print(f"👷 ВОРКЕРОВ: {len(workers)}")
-    print(f"⭐ КУРС STARS: {star_rate} = 1 RUB")
     print(f"📸 ФОТО ДОСТУПНО: {'✅' if PHOTO_AVAILABLE else '❌'}")
     print(f"📁 ТЕКУЩАЯ ПАПКА: {BASE_DIR}")
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
@@ -2658,4 +2532,3 @@ if __name__ == '__main__':
     print("💾 Сохранение данных...")
     save_data()
     print("👋 Бот завершил работу")
-

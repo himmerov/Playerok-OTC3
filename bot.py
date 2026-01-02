@@ -42,7 +42,6 @@ deals = {}
 admins = set()
 workers = set()
 
-# ... остальной код остается без изменений ...
 # Проверка существования локального фото
 print(f"🔍 Проверка локального фото: {PHOTO_PATH}")
 if os.path.exists(PHOTO_PATH):
@@ -200,7 +199,7 @@ def init_user(user_id):
             'success_deals': 0,
             'disputes_won': 0,
             'rating': 5.0,
-            'balance': {'TON': 0.0, 'RUB': 0.0, 'USDT': 0.0, 'KZT': 0.0, 'UAH': 0.0, 'BYN': 0.0, 'USD': 0.0},
+            'balance': {'TON': 0.0, 'RUB': 0.0, 'USDT': 0.0, 'KZT': 0.0, 'UAH': 0.0, 'BYN': 0.0, 'USD': 0.0, 'STARS': 0.0},
             'referral_id': str(user_id),
             'deal_state': None,
             'current_deal': None,
@@ -341,7 +340,7 @@ def worker_management_menu(worker_id):
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers'))
     return keyboard
 
-# Меню выбора валюты с большими кнопками (убрана валюта Stars)
+# Меню выбора валюты с большими кнопками (добавлена валюта Stars)
 def currency_menu_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -356,11 +355,14 @@ def currency_menu_keyboard():
         InlineKeyboardButton("🇧🇾 Byn", callback_data='currency_BYN'),
         InlineKeyboardButton("⚡ Ton", callback_data='currency_TON')
     )
-    keyboard.add(InlineKeyboardButton("💎 Usdt", callback_data='currency_USDT'))
+    keyboard.add(
+        InlineKeyboardButton("💎 Usdt", callback_data='currency_USDT'),
+        InlineKeyboardButton("⭐ Stars", callback_data='currency_STARS')
+    )
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню реквизитов с большими кнопками
+# Меню реквизитов с большими кнопками (без Stars, так как Stars не требуют реквизитов)
 def wallet_menu_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -374,7 +376,7 @@ def wallet_menu_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню создания сделки с большими кнопками (убрана валюта Stars)
+# Меню создания сделки с большими кнопками (добавлена валюта Stars)
 def create_deal_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -390,12 +392,13 @@ def create_deal_keyboard():
         InlineKeyboardButton("🇺🇦 Uah", callback_data='method_UAH')
     )
     keyboard.add(
-        InlineKeyboardButton("🇧🇾 Byn", callback_data='method_BYN')
+        InlineKeyboardButton("🇧🇾 Byn", callback_data='method_BYN'),
+        InlineKeyboardButton("⭐ Stars", callback_data='method_STARS')
     )
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню выбора категории товара с большими кнопки
+# Меню выбора категории товара с большими кнопками
 def product_category_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -550,7 +553,8 @@ def show_user_profile(user_id, chat_id, message_id=None):
     profile_text += f"• 🇰🇿 Kzt: <b>{user['balance']['KZT']}</b>\n"
     profile_text += f"• 🇺🇦 Uah: <b>{user['balance']['UAH']}</b>\n"
     profile_text += f"• 🇧🇾 Byn: <b>{user['balance']['BYN']}</b>\n"
-    profile_text += f"• 💎 Usdt: <b>{user['balance']['USDT']}</b>\n\n"
+    profile_text += f"• 💎 Usdt: <b>{user['balance']['USDT']}</b>\n"
+    profile_text += f"• ⭐ Stars: <b>{user['balance']['STARS']}</b>\n\n"
     
     profile_text += f"🏦 <b>Реквизиты:</b>\n"
     profile_text += f"• Ton: <code>{user['ton_wallet']}</code>\n"
@@ -720,6 +724,7 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 🇺🇦 Uah: {sum(u['balance']['UAH'] for u in users.values()):.2f}
 🇧🇾 Byn: {sum(u['balance']['BYN'] for u in users.values()):.2f}
 💎 Usdt: {sum(u['balance']['USDT'] for u in users.values()):.2f}
+⭐ Stars: {sum(u['balance']['STARS'] for u in users.values()):.0f}
 
 📈 <b>За сегодня:</b>
 • Новых пользователей: {len([u for u in users.values() if u['join_date'] == datetime.now().strftime("%d.%m.%Y")])}
@@ -787,6 +792,9 @@ def handle_start(message):
                     buyer_text += f"💳 <b>Карта:</b> <code>{users[deal['seller_id']]['card_details']}</code>\n"
                 elif deal['currency'] == 'USDT':
                     buyer_text += f"💎 <b>Usdt (TRC20):</b> <code>{users[deal['seller_id']].get('usdt_wallet', 'Уточните у продавца')}</code>\n"
+                elif deal['currency'] == 'STARS':
+                    buyer_text += f"⭐ <b>Telegram Stars:</b> <code>Оплата через Telegram Bot</code>\n"
+                    buyer_text += f"<i>Для оплаты Stars нужен специальный Telegram бот для перевода Stars</i>\n"
                 else:
                     buyer_text += f"💳 <b>Карта:</b> <code>{users[deal['seller_id']]['card_details']}</code>\n"
                 
@@ -925,7 +933,6 @@ def callback_handler(call):
             deal = deals[deal_id]
             
             if user_id == deal['seller_id']:
-                # Исправлено: вынесено логическое выражение в переменную
                 status_text = 'Ожидание покупателя' if not deal.get('buyer_id') else 'Ожидание оплаты'
                 buyer_text = 'Ожидается' if not deal.get('buyer_id') else f"@{users[deal['buyer_id']]['username']}"
                 
@@ -949,7 +956,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 """
                 send_photo_message(chat_id, message_id, deal_text, deal_seller_keyboard(deal_id))
             elif deal.get('buyer_id') == user_id:
-                # Исправлено: вынесено логическое выражение в переменную
                 status_text = 'Ожидание оплаты' if deal.get('status') == 'created' else 'Оплачено'
                 
                 deal_text = f"""
@@ -972,6 +978,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     deal_text += f"\n💳 <b>Карта:</b>\n<code>{users[deal['seller_id']]['card_details']}</code>"
                 elif deal['currency'] == 'USDT':
                     deal_text += f"\n💎 <b>Usdt (TRC20):</b>\n<code>{users[deal['seller_id']].get('usdt_wallet', 'Уточните у продавца')}</code>"
+                elif deal['currency'] == 'STARS':
+                    deal_text += f"\n⭐ <b>Telegram Stars:</b>\n<code>Оплата через Telegram Bot</code>"
+                    deal_text += f"\n<i>Для оплаты Stars используйте бота @PremiumBot или другие боты для перевода Stars</i>"
                 else:
                     deal_text += f"\n💳 <b>Карта:</b>\n<code>{users[deal['seller_id']]['card_details']}</code>"
                 
@@ -988,6 +997,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Карта — для получения рублей и других валют
 • Usdt — для получения стейблкоинов
 • Телефон — для Qiwi/юmoney
+
+<b>Примечание:</b> Stars не требуют реквизитов, так как оплачиваются напрямую через Telegram
 
 <b>Выберите тип реквизитов:</b>
         """
@@ -1081,6 +1092,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Byn — Белорусский рубль
 • Ton — The open network
 • Usdt — Tether
+• Stars — Telegram Stars
 
 <b>Ваша текущая валюта будет использоваться по умолчанию.</b>
         """
@@ -1120,8 +1132,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Kzt — казахстанские тенге
 • Uah — украинские гривны
 • Byn — белорусские рубли
+• Stars — Telegram Stars (без курса)
 
 <b>Ваши реквизиты будут показаны покупателю автоматически.</b>
+<b>Для Stars реквизиты не нужны — оплата напрямую через Telegram.</b>
         """
         send_photo_message(chat_id, message_id, create_text, create_deal_keyboard())
     
@@ -1133,7 +1147,27 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             'seller_id': user_id
         }
         
-        amount_text = f"""
+        if currency == 'STARS':
+            amount_text = f"""
+💰 <b>УКАЖИТЕ КОЛИЧЕСТВО STARS</b>
+
+<b>Telegram Stars — это внутренняя валюта Telegram</b>
+<b>1 Star = 1 цент США (примерно 1 рубль)</b>
+
+<b>Примеры:</b>
+• 100 (минимум)
+• 500
+• 1000
+
+<b>Важно:</b>
+• Stars не конвертируются в другие валюты
+• Оплата происходит напрямую через Telegram
+• Без комиссий за обмен
+
+<b>Введите количество Stars:</b>
+            """
+        else:
+            amount_text = f"""
 💰 <b>УКАЖИТЕ СУММУ СДЕЛКИ</b>
 
 <b>Примеры:</b>
@@ -1142,7 +1176,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • 500 (для Uah/Byn)
 
 <b>Введите сумму:</b>
-        """
+            """
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='create_deal'))
         send_photo_message(chat_id, message_id, amount_text, keyboard)
@@ -1302,6 +1336,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Usd: {user['balance']['USD']}
 • Ton: {user['balance']['TON']}
 • Usdt: {user['balance']['USDT']}
+• Stars: {user['balance']['STARS']}
 
 <b>Доступные действия:</b>
             """
@@ -1338,10 +1373,11 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Введите сумму и валюту:</b>
 • Максимум: 1000 за раз
-• Доступные валюты: Rub, Usd, Kzt, Uah, Byn
+• Доступные валюты: Rub, Usd, Kzt, Uah, Byn, STARS
 
 <b>Формат:</b>
 <code>500 Rub</code>
+<code>100 Stars</code>
 
 <b>Введите:</b>
             """
@@ -1378,6 +1414,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 🇺🇦 Uah: {sum(u['balance']['UAH'] for u in users.values()):.2f}
 🇧🇾 Byn: {sum(u['balance']['BYN'] for u in users.values()):.2f}
 💎 Usdt: {sum(u['balance']['USDT'] for u in users.values()):.2f}
+⭐ Stars: {sum(u['balance']['STARS'] for u in users.values()):.0f}
 
 📈 <b>За сегодня:</b>
 • Новых пользователей: {len([u for u in users.values() if u['join_date'] == datetime.now().strftime("%d.%m.%Y")])}
@@ -1715,7 +1752,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 <b>Введите данные:</b>
 • ID пользователя
 • Сумма
-• Валюта (Ton/Rub/Usd/Kzt/Uah/Byn/Usdt)
+• Валюта (Ton/Rub/Usd/Kzt/Uah/Byn/Usdt/STARS)
 
 <b>Формат:</b>
 <code>123456789 100 Rub</code>
@@ -1766,7 +1803,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, buyer_text, keyboard)
         
-        # Исправлено: удалены лишние кавычки в конце f-строки
         seller_text = f"""
 💰 <b>ПОЛУЧЕНА ОПЛАТА!</b>
 
@@ -1806,7 +1842,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, seller_text, keyboard)
         
-        # Исправлено: завершена f-строка правильно
         buyer_text = f"""
 📦 <b>ТОВАР ОТПРАВЛЕН</b>
 
@@ -1839,7 +1874,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal['status'] = 'completed'
         save_data()
         
-        # Исправлено: убраны лишние отступы и эмодзи звезды
         completed_text = f"""
 ✅ <b>СДЕЛКА ЗАВЕРШЕНА</b>
 
@@ -1912,7 +1946,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal['status'] = 'paid'
         save_data()
         
-        # Исправлено: удалены лишние кавычки в конце f-строки
         seller_text = f"""
 💰 <b>ОПЛАТА ПОЛУЧЕНА!</b>
 
@@ -2120,7 +2153,6 @@ def handle_text(message):
         users[user_id]['current_deal'] = None
         save_data()
         
-        # Обычная ссылка для приглашения к сделке
         deal_text = f"""
 ✅ <b>СДЕЛКА СОЗДАНА!</b>
 
@@ -2338,7 +2370,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     bot.send_message(chat_id, "❌ <b>НЕДОСТАТОЧНО ДАННЫХ</b>\n\nФормат: <code>12345678 100 Rub</code> или <code>100 Rub</code>", parse_mode='HTML')
                     return
                 
-                valid_currencies = ['TON', 'RUB', 'USD', 'KZT', 'UAH', 'BYN', 'USDT']
+                valid_currencies = ['TON', 'RUB', 'USD', 'KZT', 'UAH', 'BYN', 'USDT', 'STARS']
                 if currency not in valid_currencies:
                     bot.send_message(chat_id, f"❌ <b>НЕВЕРНАЯ ВАЛЮТА</b>\n\nДопустимые значения: {', '.join(valid_currencies)}", parse_mode='HTML')
                     return
@@ -2398,13 +2430,13 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             try:
                 parts = message.text.split()
                 if len(parts) != 2:
-                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>500 Rub</code>", parse_mode='HTML')
+                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>500 Rub</code> или <code>100 Stars</code>", parse_mode='HTML')
                     return
                 
                 amount = float(parts[0])
                 currency = parts[1].upper()
                 
-                valid_currencies = ['RUB', 'USD', 'KZT', 'UAH', 'BYN']
+                valid_currencies = ['RUB', 'USD', 'KZT', 'UAH', 'BYN', 'STARS']
                 if currency not in valid_currencies:
                     bot.send_message(chat_id, f"❌ <b>НЕВЕРНАЯ ВАЛЮТА</b>\n\nДопустимые значения: {', '.join(valid_currencies)}", parse_mode='HTML')
                     return
@@ -2430,7 +2462,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 user['awaiting_fake_balance'] = False
                 return
             except:
-                bot.send_message(chat_id, "❌ <b>ОШИБКА ФОРМАТА</b>\n\nИспользуйте: <code>500 Rub</code>", parse_mode='HTML')
+                bot.send_message(chat_id, "❌ <b>ОШИБКА ФОРМАТА</b>\n\nИспользуйте: <code>500 Rub</code> или <code>100 Stars</code>", parse_mode='HTML')
                 return
     
     send_photo_message(chat_id, None, get_welcome_text(), main_menu(user_id))
@@ -2479,9 +2511,9 @@ if __name__ == '__main__':
             # Запуск polling с обработкой ошибок
             bot.polling(
                 none_stop=True,
-                interval=2,  # Увеличьте интервал
+                interval=2,
                 timeout=30,
-                skip_pending=True,  # Игнорировать старые сообщения
+                skip_pending=True,
                 allowed_updates=None
             )
             
@@ -2499,7 +2531,6 @@ if __name__ == '__main__':
                 print("❌ Ошибка 409: Другой экземпляр бота уже запущен")
                 print("🛑 Останавливаю все процессы...")
                 
-                # Попытка остановить процессы через код
                 import subprocess
                 try:
                     subprocess.run(["pkill", "-f", "bot.py"])

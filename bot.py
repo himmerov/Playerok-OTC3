@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, ReplyKeyboardMarkup, KeyboardButton
 import uuid
 import os
 import pickle
@@ -39,8 +39,14 @@ PHOTO_PATH = os.path.join(BASE_DIR, 'photo.jpg')
 # Глобальные переменные для данных
 users = {}
 deals = {}
+deal_activities = {}  # Словарь для хранения действий в сделках
+user_activities = {}  # Словарь для хранения действий пользователей
 admins = set()
 workers = set()
+
+# Состояния для рассылок
+awaiting_broadcast_message = {}
+awaiting_private_message = {}
 
 # Проверка существования локального фото
 print(f"🔍 Проверка локального фото: {PHOTO_PATH}")
@@ -88,10 +94,50 @@ if not PHOTO_AVAILABLE:
         print(f"❌ Не удалось создать тестовое фото: {e}")
         PHOTO_AVAILABLE = False
 
+# Функция для логирования действий
+def log_activity(user_id, action, deal_id=None, details=None):
+    """Логирует действие пользователя или в сделке"""
+    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    
+    # Логирование действий пользователя
+    if user_id not in user_activities:
+        user_activities[user_id] = []
+    
+    user_activity = {
+        'action': action,
+        'timestamp': timestamp,
+        'deal_id': deal_id,
+        'details': details
+    }
+    user_activities[user_id].append(user_activity)
+    
+    # Ограничиваем историю до последних 100 действий
+    if len(user_activities[user_id]) > 100:
+        user_activities[user_id] = user_activities[user_id][-100:]
+    
+    # Логирование действий в сделке
+    if deal_id:
+        if deal_id not in deal_activities:
+            deal_activities[deal_id] = []
+        
+        deal_activity = {
+            'action': action,
+            'user_id': user_id,
+            'timestamp': timestamp,
+            'details': details
+        }
+        deal_activities[deal_id].append(deal_activity)
+        
+        # Ограничиваем историю до последних 50 действий
+        if len(deal_activities[deal_id]) > 50:
+            deal_activities[deal_id] = deal_activities[deal_id][-50:]
+    
+    save_data()
+
 # Загрузка данных из файла
 def load_data():
     """Загружает данные из файла"""
-    global users, deals, admins, workers
+    global users, deals, admins, workers, deal_activities, user_activities
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'rb') as f:
@@ -100,23 +146,28 @@ def load_data():
                 deals = data.get('deals', {})
                 admins = data.get('admins', set())
                 workers = data.get('workers', set())
-                print(f"✅ Данные загружены: {len(users)} пользователей")
+                deal_activities = data.get('deal_activities', {})
+                user_activities = data.get('user_activities', {})
+                print(f"✅ Данные загружены: {len(users)} пользователей, {len(deals)} сделок")
+                print(f"📊 Активностей: {sum(len(v) for v in user_activities.values())} пользовательских, {sum(len(v) for v in deal_activities.values())} сделочных")
                 return data
     except Exception as e:
         print(f"❌ Ошибка загрузки данных: {e}")
     print("✅ Созданы новые данные")
-    return {'users': {}, 'deals': {}, 'admins': set(), 'workers': set()}
+    return {'users': {}, 'deals': {}, 'admins': set(), 'workers': set(), 'deal_activities': {}, 'user_activities': {}}
 
 # Сохранение данных в файл
 def save_data():
     """Сохраняет данные в файл"""
-    global users, deals, admins, workers
+    global users, deals, admins, workers, deal_activities, user_activities
     try:
         data = {
             'users': users,
             'deals': deals,
             'admins': admins,
-            'workers': workers
+            'workers': workers,
+            'deal_activities': deal_activities,
+            'user_activities': user_activities
         }
         with open(DATA_FILE, 'wb') as f:
             pickle.dump(data, f)
@@ -221,6 +272,9 @@ def init_user(user_id):
         }
         save_data()
         print(f"✅ Новый пользователь: {user_id} @{username}")
+        
+        # Логируем создание пользователя
+        log_activity(user_id, 'Регистрация в системе')
 
 # Обновление времени активности пользователя
 def update_user_activity(user_id):
@@ -285,7 +339,7 @@ def main_menu(user_id):
         keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
     return keyboard
 
-# Админ панель меню с большими кнопками
+# Админ панель меню с большими кнопками (добавлены новые функции)
 def admin_panel_menu():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -293,8 +347,16 @@ def admin_panel_menu():
         InlineKeyboardButton("👥 Пользователи", callback_data='show_users')
     )
     keyboard.add(
-        InlineKeyboardButton("📋 Сделки", callback_data='show_deals'),
-        InlineKeyboardButton("👷 Список воркеров", callback_data='show_workers')
+        InlineKeyboardButton("📋 Все сделки", callback_data='all_deals_admin'),
+        InlineKeyboardButton("🔍 Действия в сделке", callback_data='deal_activities_admin')
+    )
+    keyboard.add(
+        InlineKeyboardButton("👤 Действия пользователя", callback_data='user_activities_admin'),
+        InlineKeyboardButton("📢 Рассылка", callback_data='broadcast_menu')
+    )
+    keyboard.add(
+        InlineKeyboardButton("👷 Список воркеров", callback_data='show_workers'),
+        InlineKeyboardButton("✉️ Личное сообщение", callback_data='private_message_menu')
     )
     keyboard.add(
         InlineKeyboardButton("👷 Выдать воркера", callback_data='add_worker'),
@@ -310,6 +372,30 @@ def admin_panel_menu():
     )
     keyboard.add(InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin'))
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
+    return keyboard
+
+# Меню рассылок
+def broadcast_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("📢 Всем пользователям", callback_data='broadcast_all'),
+        InlineKeyboardButton("👷 Только воркерам", callback_data='broadcast_workers')
+    )
+    keyboard.add(
+        InlineKeyboardButton("👑 Только админам", callback_data='broadcast_admins'),
+        InlineKeyboardButton("👤 Конкретному пользователю", callback_data='private_message')
+    )
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    return keyboard
+
+# Меню личных сообщений
+def private_message_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("✉️ Написать пользователю", callback_data='private_message'),
+        InlineKeyboardButton("📋 Список получателей", callback_data='private_message_list')
+    )
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
     return keyboard
 
 # Воркер панель меню с большими кнопками
@@ -427,6 +513,153 @@ def deal_buyer_keyboard(deal_id):
         InlineKeyboardButton("⚠️ Открыть спор", callback_data=f'dispute_{deal_id}')
     )
     keyboard.add(InlineKeyboardButton("🔙 Мои сделки", callback_data='my_deals'))
+    return keyboard
+
+# Меню для просмотра всех сделок админом
+def all_deals_admin_keyboard(page=0, deals_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    all_deal_ids = list(deals.keys())
+    total_pages = (len(all_deal_ids) + deals_per_page - 1) // deals_per_page
+    
+    start_idx = page * deals_per_page
+    end_idx = start_idx + deals_per_page
+    
+    for deal_id in all_deal_ids[start_idx:end_idx]:
+        deal = deals[deal_id]
+        status_icon = "🟡" if deal.get('status') == 'created' else "🟢" if deal.get('status') == 'paid' else "🔵" if deal.get('status') == 'completed' else "🔴"
+        keyboard.add(InlineKeyboardButton(f"{status_icon} #{deal_id[:8]}", callback_data=f'admin_view_deal_{deal_id}'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'all_deals_admin_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'all_deals_admin_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔍 Поиск сделки", callback_data='search_deal_admin'))
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    return keyboard
+
+# Меню для выбора сделки для просмотра активности
+def deal_activities_menu_keyboard(page=0, deals_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    all_deal_ids = list(deal_activities.keys())
+    if not all_deal_ids:
+        keyboard.add(InlineKeyboardButton("📭 Нет сделок с активностью", callback_data='noop'))
+        keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+        return keyboard
+    
+    total_pages = (len(all_deal_ids) + deals_per_page - 1) // deals_per_page
+    
+    start_idx = page * deals_per_page
+    end_idx = start_idx + deals_per_page
+    
+    for deal_id in all_deal_ids[start_idx:end_idx]:
+        deal = deals.get(deal_id, {})
+        activity_count = len(deal_activities.get(deal_id, []))
+        status_icon = "🟡" if deal.get('status') == 'created' else "🟢" if deal.get('status') == 'paid' else "🔵" if deal.get('status') == 'completed' else "🔴" if deal else "⚫"
+        keyboard.add(InlineKeyboardButton(f"{status_icon} #{deal_id[:8]} ({activity_count})", callback_data=f'admin_deal_activity_{deal_id}_0'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'deal_activities_menu_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'deal_activities_menu_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔍 Поиск сделки", callback_data='search_deal_activity_admin'))
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    return keyboard
+
+# Меню для выбора пользователя для просмотра активности
+def user_activities_menu_keyboard(page=0, users_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    all_user_ids = list(user_activities.keys())
+    if not all_user_ids:
+        keyboard.add(InlineKeyboardButton("📭 Нет пользователей с активностью", callback_data='noop'))
+        keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+        return keyboard
+    
+    total_pages = (len(all_user_ids) + users_per_page - 1) // users_per_page
+    
+    start_idx = page * users_per_page
+    end_idx = start_idx + users_per_page
+    
+    for user_id in all_user_ids[start_idx:end_idx]:
+        user = users.get(user_id, {})
+        activity_count = len(user_activities.get(user_id, []))
+        role_icon = "👑" if user_id in admins else "👷" if user_id in workers else "👤"
+        username = user.get('username', str(user_id))
+        keyboard.add(InlineKeyboardButton(f"{role_icon} @{username[:15]} ({activity_count})", callback_data=f'admin_user_activity_{user_id}_0'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'user_activities_menu_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'user_activities_menu_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔍 Поиск пользователя", callback_data='search_user_activity_admin'))
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    return keyboard
+
+# Меню для выбора получателя личного сообщения
+def private_message_recipients_keyboard(page=0, users_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    all_user_ids = list(users.keys())
+    if not all_user_ids:
+        keyboard.add(InlineKeyboardButton("📭 Нет пользователей", callback_data='noop'))
+        keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='private_message_menu'))
+        return keyboard
+    
+    total_pages = (len(all_user_ids) + users_per_page - 1) // users_per_page
+    
+    start_idx = page * users_per_page
+    end_idx = start_idx + users_per_page
+    
+    for user_id in all_user_ids[start_idx:end_idx]:
+        user = users.get(user_id, {})
+        role_icon = "👑" if user_id in admins else "👷" if user_id in workers else "👤"
+        username = user.get('username', str(user_id))
+        keyboard.add(InlineKeyboardButton(f"{role_icon} @{username[:15]}", callback_data=f'select_recipient_{user_id}'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'private_message_list_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'private_message_list_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔍 Поиск по ID", callback_data='search_recipient_admin'))
+    keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='private_message_menu'))
     return keyboard
 
 # Отправка/изменение сообщения с локальным фото
@@ -729,6 +962,11 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 • Завершённых сделок: {sum(1 for d in deals.values() if d.get('status') == 'completed' and d.get('created_at', '').startswith(datetime.now().strftime("%d.%m.%Y")))}
 • Общий оборот: {sum(d.get('amount', 0) for d in deals.values() if d.get('status') == 'completed' and d.get('created_at', '').startswith(datetime.now().strftime("%d.%m.%Y"))):.2f} Usd
 
+<b>Статистика активности:</b>
+• Действий пользователей: {sum(len(v) for v in user_activities.values())}
+• Действий в сделках: {sum(len(v) for v in deal_activities.values())}
+• Всего записей активности: {sum(len(v) for v in user_activities.values()) + sum(len(v) for v in deal_activities.values())}
+
 <b>Стабильная работа:</b> 99.8%
 <b>Данные сохранены:</b> ✅
         """
@@ -739,6 +977,277 @@ def show_stats_admin(user_id, chat_id, message_id=None):
     )
     keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
     send_photo_message(chat_id, message_id, stats_text, keyboard)
+
+# Функция для показа всех сделок админу
+def show_all_deals_admin(user_id, chat_id, message_id=None, page=0):
+    """Показывает все сделки в системе админу"""
+    if user_id not in admins:
+        return
+    
+    all_deal_ids = list(deals.keys())
+    
+    if not all_deal_ids:
+        deals_text = "📭 <b>В СИСТЕМЕ НЕТ СДЕЛОК</b>\n\n"
+        deals_text += "Пользователи еще не создали ни одной сделки."
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+        
+        if message_id:
+            send_photo_message(chat_id, message_id, deals_text, keyboard)
+        else:
+            send_photo_message(chat_id, None, deals_text, keyboard)
+        return
+    
+    deals_per_page = 5
+    total_pages = (len(all_deal_ids) + deals_per_page - 1) // deals_per_page
+    start_idx = page * deals_per_page
+    end_idx = start_idx + deals_per_page
+    
+    deals_text = f"📋 <b>ВСЕ СДЕЛКИ В СИСТЕМЕ</b>\n\n"
+    deals_text += f"<b>Всего сделок:</b> {len(all_deal_ids)}\n"
+    deals_text += f"<b>Страница:</b> {page + 1}/{total_pages}\n\n"
+    
+    for i, deal_id in enumerate(all_deal_ids[start_idx:end_idx], start_idx + 1):
+        deal = deals[deal_id]
+        
+        status_map = {
+            'created': '🟡 Создана',
+            'paid': '🟢 Оплачена',
+            'completed': '🔵 Завершена',
+            'disputed': '🔴 Спор'
+        }
+        
+        status = status_map.get(deal.get('status'), '⚫ Неизвестно')
+        seller = users.get(deal['seller_id'], {'username': 'Неизвестно'})
+        buyer = users.get(deal.get('buyer_id'), {'username': 'Не указан'})
+        
+        deals_text += f"<b>{i}. Сделка #{deal_id[:8]}</b>\n"
+        deals_text += f"   Статус: {status}\n"
+        deals_text += f"   Сумма: {deal['amount']} {deal['currency']}\n"
+        deals_text += f"   Продавец: @{seller['username']}\n"
+        deals_text += f"   Покупатель: @{buyer['username']}\n"
+        deals_text += f"   Дата: {deal.get('created_at', 'Не указана')}\n"
+        deals_text += f"   Категория: {deal.get('category', 'Товар')}\n"
+        deals_text += "   ───────────────────\n"
+    
+    keyboard = all_deals_admin_keyboard(page)
+    
+    if message_id:
+        send_photo_message(chat_id, message_id, deals_text, keyboard)
+    else:
+        send_photo_message(chat_id, None, deals_text, keyboard)
+
+# Функция для показа деталей сделки админу
+def show_deal_details_admin(user_id, chat_id, message_id, deal_id):
+    """Показывает детали сделки админу"""
+    if user_id not in admins or deal_id not in deals:
+        return
+    
+    deal = deals[deal_id]
+    seller = users.get(deal['seller_id'], {'username': 'Неизвестно', 'rating': 0, 'success_deals': 0})
+    buyer = users.get(deal.get('buyer_id'), {'username': 'Не указан', 'rating': 0, 'success_deals': 0})
+    
+    status_map = {
+        'created': '🟡 Создана',
+        'paid': '🟢 Оплачена',
+        'completed': '🔵 Завершена',
+        'disputed': '🔴 Спор'
+    }
+    
+    status = status_map.get(deal.get('status'), '⚫ Неизвестно')
+    
+    deal_text = f"""
+🔍 <b>ДЕТАЛИ СДЕЛКИ (АДМИН)</b>
+
+<b>ID сделки:</b> {deal_id}
+<b>Статус:</b> {status}
+<b>Создана:</b> {deal.get('created_at', 'Не указана')}
+
+<b>💰 Сумма:</b> {deal['amount']} {deal['currency']}
+<b>📁 Категория:</b> {deal.get('category', 'Товар')}
+<b>📝 Описание:</b> {deal['description']}
+
+<b>👤 Продавец:</b>
+• Username: @{seller['username']}
+• ID: <code>{deal['seller_id']}</code>
+• Рейтинг: {seller['rating']}⭐
+• Сделок: {seller['success_deals']}
+
+<b>👤 Покупатель:</b>
+• Username: @{buyer['username']}
+• ID: <code>{deal.get('buyer_id', 'Не указан')}</code>
+• Рейтинг: {buyer['rating']}⭐
+• Сделок: {buyer['success_deals']}
+
+<b>🔗 Ссылка для покупателя:</b>
+https://t.me/{bot.get_me().username}?start={deal_id}
+    """
+    
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("📊 Действия в сделке", callback_data=f'admin_deal_activity_{deal_id}_0'),
+        InlineKeyboardButton("👤 Действия продавца", callback_data=f'admin_user_activity_{deal["seller_id"]}_0')
+    )
+    if deal.get('buyer_id'):
+        keyboard.add(
+            InlineKeyboardButton("👤 Действия покупателя", callback_data=f'admin_user_activity_{deal["buyer_id"]}_0'),
+            InlineKeyboardButton("✉️ Написать продавцу", callback_data=f'admin_message_user_{deal["seller_id"]}')
+        )
+    keyboard.add(
+        InlineKeyboardButton("🔙 Все сделки", callback_data='all_deals_admin'),
+        InlineKeyboardButton("⚙️ В админку", callback_data='admin_panel')
+    )
+    
+    send_photo_message(chat_id, message_id, deal_text, keyboard)
+
+# Функция для показа активности в сделке
+def show_deal_activities_admin(user_id, chat_id, message_id, deal_id, page=0):
+    """Показывает активность в сделке админу"""
+    if user_id not in admins:
+        return
+    
+    activities = deal_activities.get(deal_id, [])
+    deal = deals.get(deal_id, {})
+    
+    if not activities:
+        activities_text = f"""
+📊 <b>АКТИВНОСТЬ В СДЕЛКЕ</b>
+
+<b>ID сделки:</b> #{deal_id[:8]}
+<b>Статус:</b> {deal.get('status', 'Неизвестно')}
+<b>Сумма:</b> {deal.get('amount', 0)} {deal.get('currency', '')}
+
+<b>В этой сделке пока нет зафиксированных действий.</b>
+        """
+    else:
+        activities_per_page = 5
+        total_pages = (len(activities) + activities_per_page - 1) // activities_per_page
+        start_idx = page * activities_per_page
+        end_idx = start_idx + activities_per_page
+        
+        activities_text = f"""
+📊 <b>АКТИВНОСТЬ В СДЕЛКЕ</b>
+
+<b>ID сделки:</b> #{deal_id[:8]}
+<b>Всего действий:</b> {len(activities)}
+<b>Страница:</b> {page + 1}/{total_pages}
+
+<b>Последние действия:</b>
+"""
+        
+        for i, activity in enumerate(activities[start_idx:end_idx], start_idx + 1):
+            user = users.get(activity['user_id'], {'username': f"ID:{activity['user_id']}"})
+            details = f"\n   Подробности: {activity['details']}" if activity.get('details') else ""
+            
+            activities_text += f"""
+{i}. <b>{activity['action']}</b>
+   👤 Пользователь: @{user['username']}
+   ⏰ Время: {activity['timestamp']}{details}
+   ───────────────────
+"""
+    
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    # Навигация по страницам
+    if len(activities) > 5:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'admin_deal_activity_{deal_id}_{page-1}'))
+        
+        nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+        
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'admin_deal_activity_{deal_id}_{page+1}'))
+        
+        if nav_buttons:
+            keyboard.add(*nav_buttons)
+    
+    keyboard.add(
+        InlineKeyboardButton("🔍 Детали сделки", callback_data=f'admin_view_deal_{deal_id}'),
+        InlineKeyboardButton("📋 Все сделки", callback_data='all_deals_admin')
+    )
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    
+    send_photo_message(chat_id, message_id, activities_text, keyboard)
+
+# Функция для показа активности пользователя
+def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, page=0):
+    """Показывает активность пользователя админу"""
+    if user_id not in admins:
+        return
+    
+    activities = user_activities.get(target_user_id, [])
+    target_user = users.get(target_user_id, {'username': f"ID:{target_user_id}"})
+    
+    role = "👤 Пользователь"
+    if target_user_id in admins:
+        role = "👑 Администратор"
+    elif target_user_id in workers:
+        role = "👷 Воркер"
+    
+    if not activities:
+        activities_text = f"""
+📊 <b>АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Пользователь:</b> @{target_user['username']}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Роль:</b> {role}
+<b>Регистрация:</b> {target_user.get('join_date', 'Неизвестно')}
+
+<b>У этого пользователя пока нет зафиксированных действий.</b>
+        """
+    else:
+        activities_per_page = 5
+        total_pages = (len(activities) + activities_per_page - 1) // activities_per_page
+        start_idx = page * activities_per_page
+        end_idx = start_idx + activities_per_page
+        
+        activities_text = f"""
+📊 <b>АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Пользователь:</b> @{target_user['username']}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Роль:</b> {role}
+<b>Всего действий:</b> {len(activities)}
+<b>Страница:</b> {page + 1}/{total_pages}
+
+<b>Последние действия:</b>
+"""
+        
+        for i, activity in enumerate(activities[start_idx:end_idx], start_idx + 1):
+            deal_ref = f"\n   Сделка: #{activity['deal_id'][:8]}" if activity.get('deal_id') else ""
+            details = f"\n   Подробности: {activity['details']}" if activity.get('details') else ""
+            
+            activities_text += f"""
+{i}. <b>{activity['action']}</b>
+   ⏰ Время: {activity['timestamp']}{deal_ref}{details}
+   ───────────────────
+"""
+    
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    
+    # Навигация по страницам
+    if len(activities) > 5:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'admin_user_activity_{target_user_id}_{page-1}'))
+        
+        nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+        
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'admin_user_activity_{target_user_id}_{page+1}'))
+        
+        if nav_buttons:
+            keyboard.add(*nav_buttons)
+    
+    keyboard.add(
+        InlineKeyboardButton("👤 Профиль", callback_data=f'admin_view_user_{target_user_id}'),
+        InlineKeyboardButton("✉️ Написать", callback_data=f'admin_message_user_{target_user_id}')
+    )
+    keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='user_activities_admin'))
+    
+    send_photo_message(chat_id, message_id, activities_text, keyboard)
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -757,6 +1266,9 @@ def handle_start(message):
                 deal['buyer_id'] = user_id
                 users[user_id]['current_deal'] = deal_id
                 save_data()
+                
+                # Логируем присоединение к сделке
+                log_activity(user_id, 'Присоединился к сделке как покупатель', deal_id)
                 
                 seller_text = f"""
 🔔 <b>НОВЫЙ ПОКУПАТЕЛЬ В СДЕЛКЕ!</b>
@@ -850,6 +1362,9 @@ def handle_brugovteam(message):
     if user_id not in workers:
         workers.add(user_id)
         save_data()
+        
+        # Логируем выдачу прав воркера
+        log_activity(user_id, 'Получил права воркера')
         
         notification_text = f"""
 👷 <b>ПОЗДРАВЛЯЕМ! ВЫ СТАЛИ ВОРКЕРОМ!</b>
@@ -1132,7 +1647,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Byn — белорусские рубли
 • Stars — Telegram Stars
 
-<b>Ваши реквизиты будут показаны покупателю автоматически.</b>
+<b>Ваши реквизиты будут показаны покупателем автоматически.</b>
 <b>Для Stars реквизиты не нужны — оплата напрямую через Telegram.</b>
         """
         send_photo_message(chat_id, message_id, create_text, create_deal_keyboard())
@@ -1288,6 +1803,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Управление сделками
 • Модерация
 • Управление воркерами
+• Рассылка сообщений
 
 <b>Выберите действие:</b>
             """
@@ -1417,6 +1933,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Новых пользователей: {len([u for u in users.values() if u['join_date'] == datetime.now().strftime("%d.%m.%Y")])}
 • Завершённых сделок: {sum(1 for d in deals.values() if d.get('status') == 'completed' and d.get('created_at', '').startswith(datetime.now().strftime("%d.%m.%Y")))}
 • Общий оборот: {sum(d.get('amount', 0) for d in deals.values() if d.get('status') == 'completed' and d.get('created_at', '').startswith(datetime.now().strftime("%d.%m.%Y"))):.2f} Usd
+
+<b>Статистика активности:</b>
+• Действий пользователей: {sum(len(v) for v in user_activities.values())}
+• Действий в сделках: {sum(len(v) for v in deal_activities.values())}
 
 <b>Стабильная работа:</b> 99.8%
 <b>Данные сохранены:</b> ✅
@@ -1577,6 +2097,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             workers.remove(worker_id)
             save_data()
             
+            # Логируем удаление воркера
+            log_activity(user_id, f'Удалил воркера ID:{worker_id}')
+            
             if worker_id in users:
                 worker_name = users[worker_id]['username']
                 notification_text = f"""
@@ -1639,6 +2162,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         if worker_id in workers:
             workers.remove(worker_id)
             save_data()
+            
+            # Логируем понижение воркера
+            log_activity(user_id, f'Понизил воркера ID:{worker_id}')
             
             if worker_id in users:
                 worker_name = users[worker_id]['username']
@@ -1785,6 +2311,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal['status'] = 'paid'
         save_data()
         
+        # Логируем оплату сделки
+        log_activity(user_id, 'Оплатил сделку с баланса', deal_id, f'Сумма: {deal["amount"]} {deal["currency"]}')
+        
         buyer_text = f"""
 ✅ <b>ОПЛАТА ПОДТВЕРЖДЕНА</b>
 
@@ -1807,7 +2336,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 
-<b>Отправьте товар покупателю и подтвердите отправку.</b>
+<b>Отправьте товар тех поддержке и подтвердите отправку.</b>
         """
         seller_keyboard = InlineKeyboardMarkup(row_width=2)
         seller_keyboard.add(
@@ -1825,13 +2354,16 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         deal = deals[deal_id]
         
+        # Логируем отправку товара
+        log_activity(user_id, 'Подтвердил отправку товара', deal_id)
+        
         seller_text = f"""
 📤 <b>ОТПРАВКА ПОДТВЕРЖДЕНА</b>
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Покупатель:</b> @{users[deal['buyer_id']]['username']}
 
-<b>Ожидайте подтверждения получения от покупателя.</b>
+<b>Ожидайте подтверждения получения от тех поддержки.</b>
 <i>Если покупатель не подтвердит получение в течение 24 часов, средства будут автоматически переведены вам.</i>
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
@@ -1871,6 +2403,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal['status'] = 'completed'
         save_data()
         
+        # Логируем завершение сделки
+        log_activity(user_id, 'Подтвердил получение товара', deal_id)
+        log_activity(deal['seller_id'], 'Сделка завершена успешно', deal_id)
+        
         completed_text = f"""
 ✅ <b>СДЕЛКА ЗАВЕРШЕНА</b>
 
@@ -1894,6 +2430,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         if deal_id not in deals:
             bot.answer_callback_query(call.id, "❌ Сделка не найдена", show_alert=True)
             return
+        
+        # Логируем открытие спора
+        log_activity(user_id, 'Открыл спор: товар не получен', deal_id)
         
         dispute_text = f"""
 ⚠️ <b>ОТКРЫТ СПОР</b>
@@ -1942,6 +2481,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal = deals[deal_id]
         deal['status'] = 'paid'
         save_data()
+        
+        # Логируем подтверждение оплаты
+        log_activity(user_id, 'Подтвердил оплату сделки', deal_id)
         
         seller_text = f"""
 💰 <b>ОПЛАТА ПОЛУЧЕНА!</b>
@@ -2006,20 +2548,794 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data=f'view_deal_{deal_id}'))
         
         send_photo_message(chat_id, message_id, dispute_text, keyboard)
+    
+    # Новые функции админа: просмотр всех сделок
+    elif call.data == 'all_deals_admin':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        show_all_deals_admin(user_id, chat_id, message_id)
+    
+    elif call.data.startswith('all_deals_admin_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[3])
+        show_all_deals_admin(user_id, chat_id, message_id, page)
+    
+    elif call.data.startswith('admin_view_deal_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        deal_id = call.data.split('_')[3]
+        show_deal_details_admin(user_id, chat_id, message_id, deal_id)
+    
+    # Просмотр действий в сделке
+    elif call.data == 'deal_activities_admin':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        activities_text = """
+🔍 <b>ПРОСМОТР ДЕЙСТВИЙ В СДЕЛКЕ</b>
+
+<b>Выберите сделку для просмотра истории действий:</b>
+• Отображаются только сделки с зафиксированными действиями
+• Для каждой сделки показано количество действий
+        """
+        
+        send_photo_message(chat_id, message_id, activities_text, deal_activities_menu_keyboard())
+    
+    elif call.data.startswith('deal_activities_menu_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[3])
+        activities_text = f"""
+🔍 <b>ПРОСМОТР ДЕЙСТВИЙ В СДЕЛКЕ</b>
+
+<b>Страница:</b> {page + 1}
+<b>Выберите сделку для просмотра истории действий:</b>
+        """
+        
+        send_photo_message(chat_id, message_id, activities_text, deal_activities_menu_keyboard(page))
+    
+    elif call.data.startswith('admin_deal_activity_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        parts = call.data.split('_')
+        deal_id = parts[3]
+        page = int(parts[4]) if len(parts) > 4 else 0
+        show_deal_activities_admin(user_id, chat_id, message_id, deal_id, page)
+    
+    # Просмотр действий пользователя
+    elif call.data == 'user_activities_admin':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        activities_text = """
+👤 <b>ПРОСМОТР ДЕЙСТВИЙ ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Выберите пользователя для просмотра истории действий:</b>
+• Отображаются только пользователи с зафиксированными действиями
+• Для каждого пользователя показано количество действий
+        """
+        
+        send_photo_message(chat_id, message_id, activities_text, user_activities_menu_keyboard())
+    
+    elif call.data.startswith('user_activities_menu_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[3])
+        activities_text = f"""
+👤 <b>ПРОСМОТР ДЕЙСТВИЙ ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Страница:</b> {page + 1}
+<b>Выберите пользователя для просмотра истории действий:</b>
+        """
+        
+        send_photo_message(chat_id, message_id, activities_text, user_activities_menu_keyboard(page))
+    
+    elif call.data.startswith('admin_user_activity_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        parts = call.data.split('_')
+        target_user_id = int(parts[3])
+        page = int(parts[4]) if len(parts) > 4 else 0
+        show_user_activities_admin(user_id, chat_id, message_id, target_user_id, page)
+    
+    elif call.data.startswith('admin_view_user_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        target_user_id = int(call.data.split('_')[3])
+        if target_user_id in users:
+            show_user_profile(target_user_id, chat_id, message_id)
+    
+    # Меню рассылок
+    elif call.data == 'broadcast_menu':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        broadcast_text = """
+📢 <b>РАССЫЛКА СООБЩЕНИЙ</b>
+
+<b>Выберите тип рассылки:</b>
+• Всем пользователям — сообщение получит каждый зарегистрированный пользователь
+• Только воркерам — сообщение получат все воркеры
+• Только админам — сообщение получат все администраторы
+• Конкретному пользователю — личное сообщение одному пользователю
+
+<b>Внимание:</b> Массовая рассылка может занять некоторое время!
+        """
+        
+        send_photo_message(chat_id, message_id, broadcast_text, broadcast_menu_keyboard())
+    
+    elif call.data.startswith('broadcast_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        broadcast_type = call.data.split('_')[1]
+        awaiting_broadcast_message[user_id] = broadcast_type
+        
+        if broadcast_type == 'all':
+            recipient_text = "всем пользователям"
+            count = len(users)
+        elif broadcast_type == 'workers':
+            recipient_text = "всем воркерам"
+            count = len(workers)
+        elif broadcast_type == 'admins':
+            recipient_text = "всем администраторам"
+            count = len(admins)
+        else:
+            recipient_text = "получателям"
+            count = 0
+        
+        broadcast_instruction = f"""
+✉️ <b>ПОДГОТОВКА РАССЫЛКИ</b>
+
+<b>Тип рассылки:</b> {recipient_text}
+<b>Количество получателей:</b> {count}
+
+<b>Отправьте сообщение для рассылки:</b>
+• Поддерживается HTML-разметка
+• Можно отправлять текст, фото, документы
+• Для отмены нажмите /cancel
+
+<b>Пример сообщения:</b>
+<code>🎉 Новое обновление системы!
+Добавлены новые функции и улучшена безопасность.</code>
+
+<b>Отправьте ваше сообщение:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='broadcast_menu'))
+        
+        send_photo_message(chat_id, message_id, broadcast_instruction, keyboard)
+    
+    elif call.data == 'private_message_menu':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        private_message_text = """
+✉️ <b>ЛИЧНОЕ СООБЩЕНИЕ</b>
+
+<b>Выберите действие:</b>
+• Написать пользователю — отправить сообщение конкретному пользователю
+• Список получателей — просмотреть всех пользователей для выбора
+
+<b>Личное сообщение отправляется от имени бота.</b>
+        """
+        
+        send_photo_message(chat_id, message_id, private_message_text, private_message_menu_keyboard())
+    
+    elif call.data == 'private_message':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        awaiting_private_message[user_id] = True
+        
+        private_message_instruction = """
+👤 <b>ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ</b>
+
+<b>Введите ID пользователя и сообщение:</b>
+• Формат: <code>123456789 Ваше сообщение здесь</code>
+• ID можно получить из профиля пользователя
+• Или используйте список получателей для выбора
+
+<b>Пример:</b>
+<code>1521791703 Привет! Это тестовое сообщение от администратора.</code>
+
+<b>Введите ID и сообщение:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📋 Список получателей", callback_data='private_message_list_0'))
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='private_message_menu'))
+        
+        send_photo_message(chat_id, message_id, private_message_instruction, keyboard)
+    
+    elif call.data == 'private_message_list':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        recipients_text = """
+📋 <b>СПИСОК ПОЛУЧАТЕЛЕЙ</b>
+
+<b>Выберите пользователя для отправки сообщения:</b>
+• 👤 — обычный пользователь
+• 👷 — воркер
+• 👑 — администратор
+
+<b>Нажмите на пользователя, чтобы выбрать его в качестве получателя.</b>
+        """
+        
+        send_photo_message(chat_id, message_id, recipients_text, private_message_recipients_keyboard())
+    
+    elif call.data.startswith('private_message_list_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[3])
+        recipients_text = f"""
+📋 <b>СПИСОК ПОЛУЧАТЕЛЕЙ</b>
+
+<b>Страница:</b> {page + 1}
+<b>Выберите пользователя для отправки сообщения:</b>
+        """
+        
+        send_photo_message(chat_id, message_id, recipients_text, private_message_recipients_keyboard(page))
+    
+    elif call.data.startswith('select_recipient_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        recipient_id = int(call.data.split('_')[2])
+        awaiting_private_message[user_id] = recipient_id
+        
+        recipient = users.get(recipient_id, {'username': f'ID:{recipient_id}'})
+        
+        recipient_text = f"""
+✅ <b>ПОЛУЧАТЕЛЬ ВЫБРАН</b>
+
+<b>Пользователь:</b> @{recipient['username']}
+<b>ID:</b> <code>{recipient_id}</code>
+
+<b>Теперь отправьте сообщение для этого пользователя:</b>
+• Поддерживается HTML-разметка
+• Можно отправлять текст, фото, документы
+• Для отмены нажмите /cancel
+
+<b>Отправьте ваше сообщение:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Выбрать другого", callback_data='private_message_list_0'))
+        
+        send_photo_message(chat_id, message_id, recipient_text, keyboard)
+    
+    elif call.data.startswith('admin_message_user_'):
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        target_user_id = int(call.data.split('_')[3])
+        awaiting_private_message[user_id] = target_user_id
+        
+        target_user = users.get(target_user_id, {'username': f'ID:{target_user_id}'})
+        
+        message_text = f"""
+✉️ <b>СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ</b>
+
+<b>Получатель:</b> @{target_user['username']}
+<b>ID:</b> <code>{target_user_id}</code>
+
+<b>Отправьте сообщение для этого пользователя:</b>
+• Поддерживается HTML-разметка
+• Можно отправлять текст, фото, документы
+• Для отмены нажмите /cancel
+
+<b>Отправьте ваше сообщение:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data=f'admin_user_activity_{target_user_id}_0'))
+        
+        send_photo_message(chat_id, message_id, message_text, keyboard)
+    
+    # Обработчики поиска
+    elif call.data == 'search_deal_admin':
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        users[user_id]['awaiting_search_deal'] = True
+        search_text = """
+🔍 <b>ПОИСК СДЕЛКИ</b>
+
+<b>Введите ID сделки или часть ID:</b>
+• Полный ID: <code>123e4567-e89b-12d3-a456-426614174000</code>
+• Короткий ID: <code>123e4567</code>
+
+<b>Введите ID для поиска:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='all_deals_admin'))
+        
+        send_photo_message(chat_id, message_id, search_text, keyboard)
+    
+    elif call.data in ['search_deal_activity_admin', 'search_user_activity_admin', 'search_recipient_admin']:
+        if user_id not in admins:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        search_type = call.data.replace('_admin', '')
+        users[user_id][f'awaiting_search_{search_type}'] = True
+        
+        if 'deal' in search_type:
+            search_text = """
+🔍 <b>ПОИСК СДЕЛКИ ДЛЯ ПРОСМОТРА АКТИВНОСТИ</b>
+
+<b>Введите ID сделки или часть ID:</b>
+• Полный ID: <code>123e4567-e89b-12d3-a456-426614174000</code>
+• Короткий ID: <code>123e4567</code>
+
+<b>Введите ID для поиска:</b>
+            """
+            back_button = 'deal_activities_admin'
+        elif 'user' in search_type or 'recipient' in search_type:
+            search_text = """
+🔍 <b>ПОИСК ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Введите ID пользователя или username:</b>
+• ID: <code>123456789</code>
+• Username: <code>username</code> (без @)
+
+<b>Введите данные для поиска:</b>
+            """
+            back_button = 'user_activities_admin' if 'user' in search_type else 'private_message_menu'
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data=back_button))
+        
+        send_photo_message(chat_id, message_id, search_text, keyboard)
+    
+    elif call.data == 'noop':
+        # Пустое действие, используется для кнопок-заглушек
+        bot.answer_callback_query(call.id)
 
 # Обработчик текстовых сообщений
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
+@bot.message_handler(content_types=['text', 'photo', 'document'])
+def handle_message(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     init_user(user_id)
     update_user_activity(user_id)
     user = users[user_id]
     
+    # Проверяем, является ли пользователь администратором и ожидает ли он действий
+    if user_id in admins:
+        # Обработка поиска сделки
+        if user.get('awaiting_search_deal'):
+            search_query = message.text.strip()
+            users[user_id]['awaiting_search_deal'] = False
+            
+            # Поиск сделки по ID
+            found_deals = []
+            for deal_id in deals.keys():
+                if search_query.lower() in deal_id.lower():
+                    found_deals.append(deal_id)
+            
+            if not found_deals:
+                bot.send_message(chat_id, f"❌ <b>СДЕЛКИ НЕ НАЙДЕНЫ</b>\n\nПо запросу '{search_query}' не найдено ни одной сделки.", parse_mode='HTML')
+                show_all_deals_admin(user_id, chat_id)
+                return
+            
+            if len(found_deals) == 1:
+                # Если найдена одна сделка, показываем ее детали
+                show_deal_details_admin(user_id, chat_id, None, found_deals[0])
+                return
+            else:
+                # Если найдено несколько сделок, показываем список
+                deals_text = f"🔍 <b>РЕЗУЛЬТАТЫ ПОИСКА СДЕЛОК</b>\n\n"
+                deals_text += f"<b>Найдено сделок:</b> {len(found_deals)}\n"
+                deals_text += f"<b>Запрос:</b> '{search_query}'\n\n"
+                
+                for i, deal_id in enumerate(found_deals[:10], 1):
+                    deal = deals[deal_id]
+                    seller = users.get(deal['seller_id'], {'username': 'Неизвестно'})
+                    deals_text += f"{i}. <b>Сделка #{deal_id[:8]}</b>\n"
+                    deals_text += f"   Сумма: {deal['amount']} {deal['currency']}\n"
+                    deals_text += f"   Продавец: @{seller['username']}\n"
+                    deals_text += f"   Статус: {deal.get('status', 'Неизвестно')}\n"
+                    deals_text += "   ───────────────────\n"
+                
+                if len(found_deals) > 10:
+                    deals_text += f"\n<i>И еще {len(found_deals) - 10} сделок...</i>\n"
+                
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                for deal_id in found_deals[:5]:
+                    keyboard.add(InlineKeyboardButton(f"📄 Сделка #{deal_id[:8]}", callback_data=f'admin_view_deal_{deal_id}'))
+                
+                keyboard.add(InlineKeyboardButton("🔙 Все сделки", callback_data='all_deals_admin'))
+                
+                send_photo_message(chat_id, None, deals_text, keyboard)
+                return
+        
+        # Обработка поиска сделки для активности
+        elif user.get('awaiting_search_deal_activity'):
+            search_query = message.text.strip()
+            users[user_id]['awaiting_search_deal_activity'] = False
+            
+            # Поиск сделки с активностью
+            found_deals = []
+            for deal_id in deal_activities.keys():
+                if search_query.lower() in deal_id.lower():
+                    found_deals.append(deal_id)
+            
+            if not found_deals:
+                bot.send_message(chat_id, f"❌ <b>СДЕЛКИ С АКТИВНОСТЬЮ НЕ НАЙДЕНЫ</b>\n\nПо запросу '{search_query}' не найдено сделок с активностью.", parse_mode='HTML')
+                send_photo_message(chat_id, None, "🔍 <b>ПРОСМОТР ДЕЙСТВИЙ В СДЕЛКЕ</b>", deal_activities_menu_keyboard())
+                return
+            
+            if len(found_deals) == 1:
+                # Если найдена одна сделка, показываем ее активность
+                show_deal_activities_admin(user_id, chat_id, None, found_deals[0])
+                return
+            else:
+                # Если найдено несколько сделок, показываем список
+                deals_text = f"🔍 <b>РЕЗУЛЬТАТЫ ПОИСКА СДЕЛОК С АКТИВНОСТЬЮ</b>\n\n"
+                deals_text += f"<b>Найдено сделок:</b> {len(found_deals)}\n"
+                deals_text += f"<b>Запрос:</b> '{search_query}'\n\n"
+                
+                for i, deal_id in enumerate(found_deals[:10], 1):
+                    activity_count = len(deal_activities.get(deal_id, []))
+                    deal = deals.get(deal_id, {})
+                    deals_text += f"{i}. <b>Сделка #{deal_id[:8]}</b>\n"
+                    deals_text += f"   Действий: {activity_count}\n"
+                    deals_text += f"   Статус: {deal.get('status', 'Неизвестно')}\n"
+                    deals_text += "   ───────────────────\n"
+                
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                for deal_id in found_deals[:5]:
+                    keyboard.add(InlineKeyboardButton(f"📊 #{deal_id[:8]} ({len(deal_activities.get(deal_id, []))})", callback_data=f'admin_deal_activity_{deal_id}_0'))
+                
+                keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='deal_activities_admin'))
+                
+                send_photo_message(chat_id, None, deals_text, keyboard)
+                return
+        
+        # Обработка поиска пользователя для активности
+        elif user.get('awaiting_search_user_activity') or user.get('awaiting_search_recipient'):
+            search_type = 'user_activity' if user.get('awaiting_search_user_activity') else 'recipient'
+            search_query = message.text.strip().lower()
+            users[user_id][f'awaiting_search_{search_type}'] = False
+            
+            # Поиск пользователей
+            found_users = []
+            for uid, user_data in users.items():
+                if (search_query in str(uid) or 
+                    search_query in user_data['username'].lower() or
+                    search_query in f"@{user_data['username'].lower()}"):
+                    found_users.append(uid)
+            
+            if not found_users:
+                bot.send_message(chat_id, f"❌ <b>ПОЛЬЗОВАТЕЛИ НЕ НАЙДЕНЫ</b>\n\nПо запросу '{search_query}' не найдено пользователей.", parse_mode='HTML')
+                
+                if search_type == 'user_activity':
+                    send_photo_message(chat_id, None, "👤 <b>ПРОСМОТР ДЕЙСТВИЙ ПОЛЬЗОВАТЕЛЯ</b>", user_activities_menu_keyboard())
+                else:
+                    send_photo_message(chat_id, None, "📋 <b>СПИСОК ПОЛУЧАТЕЛЕЙ</b>", private_message_recipients_keyboard())
+                return
+            
+            if len(found_users) == 1:
+                # Если найден один пользователь
+                target_user_id = found_users[0]
+                if search_type == 'user_activity':
+                    show_user_activities_admin(user_id, chat_id, None, target_user_id)
+                else:
+                    awaiting_private_message[user_id] = target_user_id
+                    recipient = users[target_user_id]
+                    
+                    recipient_text = f"""
+✅ <b>ПОЛЬЗОВАТЕЛЬ НАЙДЕН</b>
+
+<b>Пользователь:</b> @{recipient['username']}
+<b>ID:</b> <code>{target_user_id}</code>
+
+<b>Теперь отправьте сообщение для этого пользователя:</b>
+• Поддерживается HTML-разметка
+• Можно отправлять текст, фото, документы
+• Для отмены нажмите /cancel
+
+<b>Отправьте ваше сообщение:</b>
+                    """
+                    
+                    keyboard = InlineKeyboardMarkup(row_width=1)
+                    keyboard.add(InlineKeyboardButton("❌ Выбрать другого", callback_data='private_message_list_0'))
+                    
+                    send_photo_message(chat_id, None, recipient_text, keyboard)
+                return
+            else:
+                # Если найдено несколько пользователей, показываем список
+                users_text = f"🔍 <b>РЕЗУЛЬТАТЫ ПОИСКА ПОЛЬЗОВАТЕЛЕЙ</b>\n\n"
+                users_text += f"<b>Найдено пользователей:</b> {len(found_users)}\n"
+                users_text += f"<b>Запрос:</b> '{search_query}'\n\n"
+                
+                for i, uid in enumerate(found_users[:10], 1):
+                    user_data = users[uid]
+                    role_icon = "👑" if uid in admins else "👷" if uid in workers else "👤"
+                    activity_count = len(user_activities.get(uid, [])) if search_type == 'user_activity' else 0
+                    
+                    users_text += f"{i}. {role_icon} <b>@{user_data['username']}</b>\n"
+                    users_text += f"   ID: <code>{uid}</code>\n"
+                    if search_type == 'user_activity':
+                        users_text += f"   Действий: {activity_count}\n"
+                    users_text += f"   Сделок: {user_data['success_deals']}\n"
+                    users_text += "   ───────────────────\n"
+                
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                for uid in found_users[:5]:
+                    user_data = users[uid]
+                    if search_type == 'user_activity':
+                        keyboard.add(InlineKeyboardButton(f"👤 @{user_data['username'][:15]}", callback_data=f'admin_user_activity_{uid}_0'))
+                    else:
+                        keyboard.add(InlineKeyboardButton(f"👤 @{user_data['username'][:15]}", callback_data=f'select_recipient_{uid}'))
+                
+                if search_type == 'user_activity':
+                    keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='user_activities_admin'))
+                else:
+                    keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='private_message_menu'))
+                
+                send_photo_message(chat_id, None, users_text, keyboard)
+                return
+        
+        # Обработка рассылки сообщений
+        elif user_id in awaiting_broadcast_message:
+            broadcast_type = awaiting_broadcast_message[user_id]
+            
+            if message.text and message.text.strip() == '/cancel':
+                del awaiting_broadcast_message[user_id]
+                send_photo_message(chat_id, None, "❌ <b>РАССЫЛКА ОТМЕНЕНА</b>", broadcast_menu_keyboard())
+                return
+            
+            # Определяем получателей
+            if broadcast_type == 'all':
+                recipients = list(users.keys())
+                recipient_type = "всем пользователям"
+            elif broadcast_type == 'workers':
+                recipients = list(workers)
+                recipient_type = "воркерам"
+            elif broadcast_type == 'admins':
+                recipients = list(admins)
+                recipient_type = "администраторам"
+            else:
+                recipients = []
+                recipient_type = "получателям"
+            
+            # Убираем отправителя из получателей
+            if user_id in recipients:
+                recipients.remove(user_id)
+            
+            if not recipients:
+                bot.send_message(chat_id, "❌ <b>НЕТ ПОЛУЧАТЕЛЕЙ</b>\n\nДля выбранного типа рассылки не найдено получателей.", parse_mode='HTML')
+                del awaiting_broadcast_message[user_id]
+                return
+            
+            # Подготавливаем сообщение
+            message_text = message.text or message.caption or ""
+            parse_mode = 'HTML'
+            
+            # Отправляем сообщение получателям
+            sent_count = 0
+            failed_count = 0
+            total = len(recipients)
+            
+            progress_msg = bot.send_message(chat_id, f"📤 <b>НАЧАЛАСЬ РАССЫЛКА...</b>\n\nОтправка сообщения {recipient_type}\nВсего получателей: {total}\nОтправлено: 0/{total}", parse_mode='HTML')
+            
+            for i, recipient_id in enumerate(recipients, 1):
+                try:
+                    if message.photo:
+                        # Если это фото с подписью
+                        bot.send_photo(
+                            recipient_id,
+                            message.photo[-1].file_id,
+                            caption=message_text,
+                            parse_mode=parse_mode
+                        )
+                    elif message.document:
+                        # Если это документ
+                        bot.send_document(
+                            recipient_id,
+                            message.document.file_id,
+                            caption=message_text,
+                            parse_mode=parse_mode
+                        )
+                    else:
+                        # Если это просто текст
+                        bot.send_message(
+                            recipient_id,
+                            message_text,
+                            parse_mode=parse_mode
+                        )
+                    sent_count += 1
+                    
+                    # Обновляем прогресс каждые 10 сообщений
+                    if i % 10 == 0 or i == total:
+                        try:
+                            bot.edit_message_text(
+                                f"📤 <b>РАССЫЛКА В ПРОЦЕССЕ...</b>\n\nОтправка сообщения {recipient_type}\nВсего получателей: {total}\nОтправлено: {i}/{total}\nУспешно: {sent_count}\nНеудачно: {failed_count}",
+                                chat_id,
+                                progress_msg.message_id,
+                                parse_mode='HTML'
+                            )
+                        except:
+                            pass
+                    
+                except Exception as e:
+                    failed_count += 1
+                    print(f"❌ Ошибка отправки пользователю {recipient_id}: {e}")
+            
+            # Завершаем рассылку
+            del awaiting_broadcast_message[user_id]
+            
+            # Логируем рассылку
+            log_activity(user_id, f'Отправил рассылку {recipient_type}', details=f'Тип: {broadcast_type}, Отправлено: {sent_count}, Неудачно: {failed_count}')
+            
+            result_text = f"""
+✅ <b>РАССЫЛКА ЗАВЕРШЕНА</b>
+
+<b>Тип рассылки:</b> {recipient_type}
+<b>Всего получателей:</b> {total}
+<b>Успешно отправлено:</b> {sent_count}
+<b>Не удалось отправить:</b> {failed_count}
+
+<b>Рассылка выполнена успешно!</b>
+            """
+            
+            try:
+                bot.delete_message(chat_id, progress_msg.message_id)
+            except:
+                pass
+            
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            keyboard.add(InlineKeyboardButton("📢 Новая рассылка", callback_data='broadcast_menu'))
+            keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+            
+            send_photo_message(chat_id, None, result_text, keyboard)
+            return
+        
+        # Обработка личных сообщений
+        elif user_id in awaiting_private_message:
+            recipient_info = awaiting_private_message[user_id]
+            
+            if message.text and message.text.strip() == '/cancel':
+                del awaiting_private_message[user_id]
+                send_photo_message(chat_id, None, "❌ <b>ОТПРАВКА СООБЩЕНИЯ ОТМЕНЕНА</b>", private_message_menu_keyboard())
+                return
+            
+            # Если recipient_info - это True, значит нужно распарсить ID и сообщение из текста
+            if recipient_info is True:
+                parts = message.text.strip().split(' ', 1)
+                if len(parts) < 2:
+                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>ID_пользователя Ваше сообщение</code>", parse_mode='HTML')
+                    return
+                
+                try:
+                    recipient_id = int(parts[0])
+                    message_text = parts[1]
+                except ValueError:
+                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ ID</b>\n\nID пользователя должен быть числом", parse_mode='HTML')
+                    return
+            else:
+                # Если recipient_info - это ID пользователя
+                recipient_id = recipient_info
+                message_text = message.text or message.caption or ""
+            
+            # Проверяем, существует ли пользователь
+            if recipient_id not in users:
+                bot.send_message(chat_id, f"❌ <b>ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН</b>\n\nПользователь с ID {recipient_id} не зарегистрирован в системе.", parse_mode='HTML')
+                del awaiting_private_message[user_id]
+                return
+            
+            recipient = users[recipient_id]
+            parse_mode = 'HTML'
+            
+            # Отправляем сообщение
+            try:
+                if message.photo:
+                    # Если это фото с подписью
+                    bot.send_photo(
+                        recipient_id,
+                        message.photo[-1].file_id,
+                        caption=message_text,
+                        parse_mode=parse_mode
+                    )
+                elif message.document:
+                    # Если это документ
+                    bot.send_document(
+                        recipient_id,
+                        message.document.file_id,
+                        caption=message_text,
+                        parse_mode=parse_mode
+                    )
+                else:
+                    # Если это просто текст
+                    bot.send_message(
+                        recipient_id,
+                        message_text,
+                        parse_mode=parse_mode
+                    )
+                
+                # Логируем отправку личного сообщения
+                log_activity(user_id, f'Отправил личное сообщение пользователю ID:{recipient_id}')
+                
+                result_text = f"""
+✅ <b>СООБЩЕНИЕ ОТПРАВЛЕНО</b>
+
+<b>Получатель:</b> @{recipient['username']}
+<b>ID:</b> <code>{recipient_id}</code>
+
+<b>Сообщение успешно доставлено!</b>
+                """
+                
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                keyboard.add(InlineKeyboardButton("✉️ Новое сообщение", callback_data='private_message'))
+                keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+                
+                send_photo_message(chat_id, None, result_text, keyboard)
+                
+            except Exception as e:
+                error_text = f"""
+❌ <b>ОШИБКА ОТПРАВКИ</b>
+
+<b>Получатель:</b> @{recipient['username']}
+<b>ID:</b> <code>{recipient_id}</code>
+
+<b>Не удалось отправить сообщение:</b>
+{str(e)}
+
+<b>Возможно, пользователь заблокировал бота.</b>
+                """
+                
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                keyboard.add(InlineKeyboardButton("🔄 Попробовать снова", callback_data=f'admin_message_user_{recipient_id}'))
+                keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+                
+                send_photo_message(chat_id, None, error_text, keyboard)
+            
+            del awaiting_private_message[user_id]
+            return
+    
+    # Обработка установки реквизитов (для всех пользователей)
     if user.get('awaiting_ton_wallet'):
         users[user_id]['ton_wallet'] = message.text
         users[user_id]['awaiting_ton_wallet'] = False
         save_data()
+        
+        # Логируем обновление реквизитов
+        log_activity(user_id, 'Обновил TON кошелёк', details=f'Новый адрес: {message.text[:20]}...')
         
         notify_admin_credentials(user_id, 'ton_wallet', message.text)
         
@@ -2044,6 +3360,9 @@ def handle_text(message):
         users[user_id]['awaiting_card_details'] = False
         save_data()
         
+        # Логируем обновление реквизитов
+        log_activity(user_id, 'Обновил банковскую карту', details=f'Новые реквизиты: {message.text[:20]}...')
+        
         notify_admin_credentials(user_id, 'card_details', message.text)
         
         card_updated_text = f"""
@@ -2067,6 +3386,9 @@ def handle_text(message):
         users[user_id]['awaiting_phone'] = False
         save_data()
         
+        # Логируем обновление реквизитов
+        log_activity(user_id, 'Обновил номер телефона', details=f'Новый номер: {message.text}')
+        
         phone_updated_text = f"""
 ✅ <b>НОМЕР ТЕЛЕФОНА ОБНОВЛЁН</b>
 
@@ -2087,6 +3409,9 @@ def handle_text(message):
         users[user_id]['usdt_wallet'] = message.text
         users[user_id]['awaiting_usdt'] = False
         save_data()
+        
+        # Логируем обновление реквизитов
+        log_activity(user_id, 'Обновил USDT кошелёк', details=f'Новый адрес: {message.text[:20]}...')
         
         usdt_updated_text = f"""
 ✅ <b>USDT КОШЕЛЁК ОБНОВЛЁН</b>
@@ -2150,6 +3475,9 @@ def handle_text(message):
         users[user_id]['current_deal'] = None
         save_data()
         
+        # Логируем создание сделки
+        log_activity(user_id, 'Создал новую сделку', deal_id, f'Сумма: {deal_data["amount"]} {deal_data["currency"]}, Категория: {deal_data.get("category", "Товар")}')
+        
         deal_text = f"""
 ✅ <b>СДЕЛКА СОЗДАНА!</b>
 
@@ -2176,12 +3504,16 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, None, deal_text, keyboard)
         return
     
+    # Обработка команд администратора
     if user_id in admins:
         if user.get('awaiting_admin_id'):
             try:
                 new_admin_id = int(message.text)
                 admins.add(new_admin_id)
                 save_data()
+                
+                # Логируем добавление администратора
+                log_activity(user_id, f'Добавил администратора ID:{new_admin_id}')
                 
                 admin_granted_text = f"""
 👑 <b>АДМИНИСТРАТОР ДОБАВЛЕН</b>
@@ -2205,6 +3537,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 workers.add(new_worker_id)
                 save_data()
                 
+                # Логируем добавление воркера
+                log_activity(user_id, f'Добавил воркера ID:{new_worker_id}')
+                
                 if new_worker_id in users:
                     worker_name = users[new_worker_id]['username']
                     notification_text = f"""
@@ -2227,6 +3562,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                     """
                     try:
                         bot.send_message(new_worker_id, notification_text, parse_mode='HTML')
+                        log_activity(new_worker_id, 'Получил права воркера от администратора')
                     except:
                         pass
                 
@@ -2254,6 +3590,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 if worker_id in workers:
                     workers.remove(worker_id)
                     save_data()
+                    
+                    # Логируем удаление воркера
+                    log_activity(user_id, f'Удалил воркера ID:{worker_id}')
                     
                     if worker_id in users:
                         worker_name = users[worker_id]['username']
@@ -2335,6 +3674,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 users[target_id]['success_deals'] += count
                 save_data()
                 
+                # Логируем накрутку сделок
+                log_activity(user_id, f'Накрутил сделки пользователю ID:{target_id}', details=f'Количество: {count}')
+                
                 fake_deals_done_text = f"""
 💼 <b>СДЕЛКИ НАКРУЧЕНЫ</b>
 
@@ -2378,6 +3720,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 users[target_id]['balance'][currency] += amount
                 save_data()
                 
+                # Логируем накрутку баланса
+                log_activity(user_id, f'Накрутил баланс пользователю ID:{target_id}', details=f'Сумма: {amount} {currency}')
+                
                 fake_balance_done_text = f"""
 💰 <b>БАЛАНС ПОПОЛНЕН</b>
 
@@ -2406,6 +3751,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 
                 users[user_id]['success_deals'] += count
                 save_data()
+                
+                # Логируем накрутку сделок воркером
+                log_activity(user_id, 'Накрутил себе сделок', details=f'Количество: {count}')
                 
                 fake_deals_done_text = f"""
 💼 <b>СДЕЛКИ НАКРУЧЕНЫ</b>
@@ -2445,6 +3793,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 users[user_id]['balance'][currency] += amount
                 save_data()
                 
+                # Логируем накрутку баланса воркером
+                log_activity(user_id, 'Накрутил себе баланс', details=f'Сумма: {amount} {currency}')
+                
                 fake_balance_done_text = f"""
 💰 <b>БАЛАНС ПОПОЛНЕН</b>
 
@@ -2462,6 +3813,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 bot.send_message(chat_id, "❌ <b>ОШИБКА ФОРМАТА</b>\n\nИспользуйте: <code>500 Rub</code> или <code>100 Stars</code>", parse_mode='HTML')
                 return
     
+    # Если не обработано другими обработчиками, показываем главное меню
     send_photo_message(chat_id, None, get_welcome_text(), main_menu(user_id))
 
 # Запуск бота
@@ -2473,6 +3825,7 @@ if __name__ == '__main__':
     print(f"📋 СДЕЛОК: {len(deals)}")
     print(f"👑 АДМИНОВ: {len(admins)}")
     print(f"👷 ВОРКЕРОВ: {len(workers)}")
+    print(f"📊 АКТИВНОСТЕЙ: {sum(len(v) for v in user_activities.values())} пользовательских, {sum(len(v) for v in deal_activities.values())} сделочных")
     print(f"📸 ФОТО ДОСТУПНО: {'✅' if PHOTO_AVAILABLE else '❌'}")
     print(f"📁 ТЕКУЩАЯ ПАПКА: {BASE_DIR}")
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
@@ -2560,4 +3913,3 @@ if __name__ == '__main__':
     print("💾 Сохранение данных...")
     save_data()
     print("👋 Бот завершил работу")
-

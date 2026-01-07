@@ -437,7 +437,7 @@ def main_menu(user_id):
 Для выяснения причин обратитесь к администратору.
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='https://t.me/ManagerToPlayerok'))
         return blocked_text, keyboard
     
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -460,7 +460,7 @@ def main_menu(user_id):
             InlineKeyboardButton("👷 Воркер панель", callback_data='worker_panel'),
             InlineKeyboardButton("⚙️ Админ панель", callback_data='admin_panel')
         )
-        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok'))
     elif user_id in admins:
         keyboard.add(
             InlineKeyboardButton("👤 Мой профиль", callback_data='my_profile'),
@@ -478,7 +478,7 @@ def main_menu(user_id):
             InlineKeyboardButton("👷 Воркер панель", callback_data='worker_panel'),
             InlineKeyboardButton("⚙️ Админ панель", callback_data='admin_panel')
         )
-        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok'))
     elif user_id in workers:
         keyboard.add(
             InlineKeyboardButton("👤 Мой профиль", callback_data='my_profile'),
@@ -494,7 +494,7 @@ def main_menu(user_id):
         )
         keyboard.add(
             InlineKeyboardButton("💱 Валюта", callback_data='change_currency'),
-            InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276')
+            InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok')
         )
     else:
         keyboard.add(
@@ -509,7 +509,7 @@ def main_menu(user_id):
             InlineKeyboardButton("🎯 Рефералы", callback_data='referral'),
             InlineKeyboardButton("💱 Валюта", callback_data='change_currency')
         )
-        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok'))
     return get_welcome_text(), keyboard
 
 # Админ панель меню с большими кнопками (добавлены новые функции)
@@ -1589,7 +1589,7 @@ def handle_start(message):
 Для выяснения причин обратитесь к администратору.
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='https://t.me/ManagerToPlayerok'))
         bot.send_message(message.chat.id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
         return
     
@@ -1716,7 +1716,7 @@ def handle_cuprumovteam(message):
 Для выяснения причин обратитесь к администратору.
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='https://t.me/ManagerToPlayerok'))
         bot.send_message(message.chat.id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
         return
     
@@ -1784,7 +1784,7 @@ def callback_handler(call):
 Для выяснения причин обратитесь к администратору.
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='https://t.me/ManagerToPlayerok'))
         bot.send_message(chat_id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
         return
     
@@ -3791,7 +3791,7 @@ def handle_message(message):
 Для выяснения причин обратитесь к администратору.
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='https://t.me/ManagerToPlayerok'))
         bot.send_message(chat_id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
         return
     

